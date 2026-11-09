@@ -4,7 +4,7 @@ import {
   resumeSession, checkpointSession, interruptSession, endSession,
   recordOutcome, archiveTask, editTask, undoImport
 } from "../domain/core.js";
-import { proposeStep } from "../algorithm/suggest.js";
+import { proposeStep, proposeRetry } from "../algorithm/suggest.js";
 import { IndexedStateStore, createExport } from "../persistence/store.js";
 
 const root = document.querySelector("#app");
@@ -19,6 +19,7 @@ let storageReady = false;
 let captureDraft = "";
 let stepDraft = "";
 let stepDirty = false;
+let currentSuggestion = null;
 let suggestionIndex = 0;
 let chosenMinutes = 5;
 let bulkDraft = "";
@@ -120,8 +121,8 @@ function runActive() { return getSession()?.status === "running"; }
 function loadDraft() {
   const task = getTask();
   if (!task) return;
-  const suggestion = proposeStep({ title: task.title, blocker: task.blocker, index: suggestionIndex });
-  stepDraft = suggestion.text;
+  currentSuggestion = proposeStep({ title: task.title, blocker: task.blocker, index: suggestionIndex });
+  stepDraft = currentSuggestion.text;
   stepDirty = false;
 }
 
@@ -427,7 +428,7 @@ async function onAction(action, id) {
   } else if (action === "focus-screen") {
     if (getSession()) return;
     suggestionIndex = 0;
-    if (getStep()) { stepDraft = getStep().text; stepDirty = true; }
+    if (getStep()) { stepDraft = getStep().text; stepDirty = true; currentSuggestion = null; }
     else loadDraft();
     screen = "focus";
   } else if (action === "bulk-screen") {
@@ -489,8 +490,16 @@ async function onAction(action, id) {
     if (id === "task_done" && !window.confirm("确认整件任务已经完成，而不只是第一小步？")) return;
     if (await persist(s => { recordOutcome(s,session.id,id,now()); })) {
       if (id === "partial" || id === "not_started") {
-        suggestionIndex=0; loadDraft(); screen="focus";
-        setNotice("这次尝试已经记录。你可以把下一步变得更小，也可以先放下。");
+        suggestionIndex=0;
+        const task=getTask();
+        const prior=state.steps.find(step => step.id === session.stepId);
+        currentSuggestion=proposeRetry({
+          title:task.title, blocker:task.blocker, outcome:id, priorStepText:prior?.text ?? ""
+        });
+        stepDraft=currentSuggestion.text;
+        stepDirty=false;
+        screen="focus";
+        setNotice("这次尝试已经记录。已为你缩小下一步，仍可以自由修改或先放下。");
       } else screen="inbox";
     }
   } else if (action === "bulk-confirm") {
@@ -572,7 +581,7 @@ root.addEventListener("submit", async event => {
       stepDraft = form.querySelector("#step-input").value;
       const task=getTask(), id=uuid(), timestamp=now();
       const origin=stepDirty ? "manual" : "template";
-      const templateId=stepDirty ? null : proposeStep({title:task.title,blocker:task.blocker,index:suggestionIndex}).templateId;
+      const templateId=stepDirty ? null : (currentSuggestion ?? proposeStep({title:task.title,blocker:task.blocker,index:suggestionIndex})).templateId;
       if (await persist(s => { confirmStep(s,{id,taskId:task.id,text:stepDraft,source:origin,templateId,now:timestamp}); })) {
         chosenMinutes=5; screen="ready";
       }
@@ -613,7 +622,7 @@ async function boot() {
     else if (getSession()) screen="timer";
     else if (getTask()) {
       screen="focus";
-      if (getStep()) { stepDraft = getStep().text; stepDirty = true; }
+      if (getStep()) { stepDraft = getStep().text; stepDirty = true; currentSuggestion = null; }
       else loadDraft();
     }
     repo.onRemoteChange(async () => {

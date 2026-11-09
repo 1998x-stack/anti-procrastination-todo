@@ -1,4 +1,5 @@
 import { emptyState } from "../domain/core.js";
+import { validateSnapshot } from "./invariants.js";
 
 /**
  * A single IndexedDB snapshot. Readwrite transaction serializes read/validate/write
@@ -11,18 +12,25 @@ const KEY = "root";
 const COMMAND_LIMIT = 512;
 
 function applyCommand(state, command, commandId) {
+  validateSnapshot(state);
+  if (typeof command !== "function") throw new Error("INVALID_COMMAND_FUNCTION");
+  if (typeof commandId !== "string" || commandId.length < 1 || commandId.length > 128)
+    throw new Error("INVALID_COMMAND_ID");
   if (state.appliedCommands.includes(commandId)) return state;
   const draft = structuredClone(state);
   const output = command(draft);
-  const next = output && output.schemaVersion === 1 && Array.isArray(output.tasks) && Array.isArray(output.sessions) ? output : draft;
+  if (output && typeof output.then === "function")
+    throw new Error("ASYNC_MUTATION_NOT_ALLOWED");
+  const next = output && output.schemaVersion === 1 && Array.isArray(output.tasks) &&
+    Array.isArray(output.sessions) ? output : draft;
   next.revision = state.revision + 1;
   next.appliedCommands = [...state.appliedCommands, commandId].slice(-COMMAND_LIMIT);
-  return next;
+  return validateSnapshot(next);
 }
 
 export class MemoryStateStore {
   constructor() { this.state = emptyState(); }
-  async read() { return structuredClone(this.state); }
+  async read() { return structuredClone(validateSnapshot(this.state)); }
   async transact(command, id) {
     const next = applyCommand(this.state, command, id);
     this.state = structuredClone(next);
@@ -78,7 +86,10 @@ export class IndexedStateStore {
       const req = tx.objectStore(STORE).get(KEY);
       let value;
       req.onsuccess = () => { value = req.result; };
-      tx.oncomplete = () => resolve(structuredClone(value || emptyState()));
+      tx.oncomplete = () => {
+        try { resolve(structuredClone(validateSnapshot(value || emptyState()))); }
+        catch (error) { reject(error); }
+      };
       tx.onabort = () => reject(tx.error || new Error("DATABASE_READ_FAILED"));
       tx.onerror = () => reject(tx.error || new Error("DATABASE_READ_FAILED"));
     });
@@ -124,6 +135,7 @@ export class IndexedStateStore {
 }
 
 export function createExport(snapshot) {
+  validateSnapshot(snapshot);
   return JSON.stringify({
     schemaVersion: 1,
     exportedAt: new Date().toISOString(),

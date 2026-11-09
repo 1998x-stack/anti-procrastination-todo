@@ -47,11 +47,11 @@ function validValue(key, value) {
 
 export function validateEvent(event) {
   if (!event || typeof event !== "object" || Array.isArray(event)) throw new Error("INVALID_EVENT");
-  const allowed = EVENT_FIELDS[event.eventName];
-  if (!allowed) throw new Error("INVALID_EVENT_NAME");
+  const allowed = Object.hasOwn(EVENT_FIELDS, event.eventName) ? EVENT_FIELDS[event.eventName] : null;
+  if (!Array.isArray(allowed)) throw new Error("INVALID_EVENT_NAME");
   if (typeof event.eventId !== "string" || event.eventId.length > 80 || !event.eventId) throw new Error("INVALID_EVENT_ID");
-  const props = event.attributes || {};
-  if (typeof props !== "object" || Array.isArray(props)) throw new Error("INVALID_EVENT_ATTRIBUTES");
+  const props = event.attributes === undefined ? {} : event.attributes;
+  if (!props || typeof props !== "object" || Array.isArray(props)) throw new Error("INVALID_EVENT_ATTRIBUTES");
   for (const [key, value] of Object.entries(props)) {
     if (!allowed.includes(key) || RESTRICTED.test(key)) throw new Error("FORBIDDEN_EVENT_FIELD");
     if (typeof value !== "boolean" && typeof value !== "number" && typeof value !== "string") throw new Error("INVALID_EVENT_VALUE");
@@ -60,6 +60,8 @@ export function validateEvent(event) {
   }
   const forbidden = Object.keys(event).filter(k => !["eventId", "eventName", "occurredAt", "attributes"].includes(k));
   if (forbidden.length) throw new Error("FORBIDDEN_EVENT_FIELD");
-  if (Number.isNaN(Date.parse(event.occurredAt))) throw new Error("INVALID_EVENT_TIME");
+  if (typeof event.occurredAt !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(event.occurredAt) ||
+      Number.isNaN(Date.parse(event.occurredAt))) throw new Error("INVALID_EVENT_TIME");
   return { ...event, attributes: { ...props } };
 }
