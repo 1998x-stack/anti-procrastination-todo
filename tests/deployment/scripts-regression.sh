@@ -163,4 +163,23 @@ rm -f "$SF_DEPLOY_ROOT/deploy.env"
 expect_current "$R3"
 echo "ok 9: deploy.env parser rejects arbitrary variable injection"
 
-echo "9/9 isolated deployment/rollback fault-injection contracts passed"
+# GOTCHA-028: a never-activated release must not stay in the releases/ search
+# path, otherwise the poisoned entry blocks default rollback right when it is
+# needed (rollback.sh picks the newest release older than current).
+reset_fixture
+export MOCK_PREFLIGHT_FAIL=1
+before_releases="$(find "$SF_DEPLOY_ROOT/releases" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+if run_script deploy.sh >/dev/null 2>&1; then echo "preflight failure must fail the deploy" >&2; exit 1; fi
+after_releases="$(find "$SF_DEPLOY_ROOT/releases" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+[[ "$after_releases" == "$before_releases" ]] || {
+  echo "never-activated release left in releases/ ($before_releases -> $after_releases)" >&2; exit 1; }
+rejected="$(find "$SF_DEPLOY_ROOT/rejected-releases" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')"
+[[ "$rejected" -ge 2 ]] || { echo "expected the release and its config archive to be quarantined, found $rejected" >&2; exit 1; }
+export MOCK_PREFLIGHT_FAIL=0
+run_script rollback.sh >/dev/null
+[[ "$(readlink "$SF_DEPLOY_ROOT/current")" == "releases/$R2" ]] || {
+  echo "default rollback was blocked by a never-activated release" >&2; exit 1; }
+expect_config "$R2"
+echo "ok 10: never-activated releases are quarantined and cannot block rollback"
+
+echo "10/10 isolated deployment/rollback fault-injection contracts passed"
