@@ -14,6 +14,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm run verify
+      - run: npm run benchmark:algorithm
   browser-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15

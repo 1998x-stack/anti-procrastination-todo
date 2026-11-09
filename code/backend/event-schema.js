@@ -1,6 +1,6 @@
 /**
- * Proposal-only allowlisted opt-in research events. No network client/server is
- * included in this MVP; this schema is for an explicitly consented future API.
+ * Opt-in research event schema shared with the LOCAL-ONLY reference HTTP API.
+ * The user-facing MVP never calls this API; no deployed collection exists.
  */
 export const EVENT_FIELDS = Object.freeze({
   task_created: ["channel", "difficultFlag"],

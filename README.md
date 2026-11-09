@@ -15,11 +15,11 @@
 | Fast capture | Single task, multi-line paste, import preview (up to 20 entries), recent-batch undo |
 | One-task focus | Exactly one active parent task; edit, archive and return to the inbox |
 | Identify a blocker | Five selectable reasons + skip, without diagnosis or profiling |
-| First action | Conservative local suggestion engine, rotate suggestions, or write your own; user must confirm |
+| First action | Algorithm v2: 36 blocker × kind cells, conservative classifier, safe fallbacks, editable proposals, outcome-specific smaller retries |
 | Short session | 2/5/10-minute timer, pause, resume, end, hidden display and safe reload recovery |
 | Gentle reflection | Step done / partial / not started / parent task done are distinct |
-| Reliable local data | IndexedDB atomic snapshot transactions; duplicate-command guard, cross-tab conflict prevention, JSON export, explicit deletion |
-| Privacy | Task content stays in this browser; no account, task API, advertising or active telemetry backend |
+| Reliable local data | IndexedDB atomic snapshot transactions; v2 pre/post-commit snapshot invariants, duplicate-command guard, cross-tab conflict prevention, JSON export and deletion |
+| Privacy | Task text stays in this browser; no account or active telemetry. Optional loopback-only research API reference is separate and not deployed |
 | Calm Focus UI v2 | Warm editorial layout, four-stage guide, blocker cards, calm circular session timer, descriptive review, responsive mobile UI and persistent visual theme |
 
 **Honest limitations:** Browser data may be erased by clearing site storage or private browsing. Exported JSON is a portable snapshot but **import/restore is not implemented yet**. Switching away from the page pauses confirmed foreground time; time in another app is not treated as verified work. No cloud sync, AI API, scheduled reminders or server-side research metrics are running.
@@ -41,12 +41,13 @@ Automated unit tests require Node.js 20+; browser tests use a development-only P
 npm test                 # Node.js domain, algorithm, persistence-contract and privacy schema tests
 npm run check            # Syntax checks
 npm run verify           # Syntax + unit tests
+npm run benchmark:algorithm  # 12,000 synthetic suggestion/classification calls
 npm install
 npx playwright install chromium
 npm run test:e2e         # Local Chromium end-to-end tests
 ~~~
 
-GitHub Actions runs both suites automatically on pushes to main and on pull requests. UI tests also save synthetic desktop/mobile/focus/timer/review screenshots as workflow artifacts. A passing CI does not replace cross-device or real-user testing.
+GitHub Actions runs Node unit/contract tests, Chromium E2E and an informational algorithm microbenchmark on pushes to main and on pull requests. UI tests also save synthetic desktop/mobile/focus/timer/review screenshots as workflow artifacts. A passing CI does not replace cross-device or real-user testing.
 
 ## Code categories / Repository map
 
@@ -59,7 +60,7 @@ GitHub Actions runs both suites automatically on pushes to main and on pull requ
 │   ├── domain/                 # Pure Task / Step / Session state and guards
 │   ├── persistence/            # IndexedDB transaction-backed state and export
 │   ├── frontend/               # Responsive UI, timer, recovery, styles
-│   └── backend/                # Future opt-in event schema; no deployed backend
+│   └── backend/                # Local-only opt-in event reference server + SQL plan; not deployed
 ├── tests/
 │   ├── *.test.js               # Node unit and contract tests
 │   └── browser/                # Chromium browser flows
@@ -84,7 +85,8 @@ IndexedDB: source of truth
   ↓ optional user export
 JSON file on the user's own device
 
-Backend: NOT DEPLOYED
+Optional research reference: loopback-only and disabled by default
+Production backend: NOT DEPLOYED
 ~~~
 
 - **One parent task ≠ one completed step.** A completed Step never marks a Task done automatically.
@@ -100,12 +102,13 @@ The product research and approved design assumptions live in the portfolio repos
 - [Original Hacker News / Product Hunt research](https://github.com/1998x-stack/projects/blob/main/projects/productivity/anti-procrastination-todo/reports/research-2026-11.md)
 - [Product Requirements Document v1.0](https://github.com/1998x-stack/projects/blob/main/projects/productivity/anti-procrastination-todo/reports/prd-mvp-v1.0.md)
 - [76-item MVP functional specification](https://github.com/1998x-stack/projects/blob/main/projects/productivity/anti-procrastination-todo/reports/mvp-functional-spec-v1.0.md)
+- [Algorithm optimization v2](https://github.com/1998x-stack/projects/blob/main/projects/productivity/anti-procrastination-todo/reports/algorithm-optimization-v2.md) · [Backend/data optimization v2](https://github.com/1998x-stack/projects/blob/main/projects/productivity/anti-procrastination-todo/reports/backend-optimization-v2.md)
 - [Algorithm architecture](https://github.com/1998x-stack/projects/blob/main/projects/productivity/anti-procrastination-todo/reports/architecture-algorithm-v1.0.md) · [Backend architecture](https://github.com/1998x-stack/projects/blob/main/projects/productivity/anti-procrastination-todo/reports/architecture-backend-v1.0.md) · [Frontend architecture](https://github.com/1998x-stack/projects/blob/main/projects/productivity/anti-procrastination-todo/reports/architecture-frontend-v1.0.md)
 
 ## Scope and next gates
 
 The initial stack uses **browser ES modules instead of React/TypeScript**, intentionally avoiding dependencies until the action-first loop is useful and trustworthy. Module boundaries permit replacing the UI layer later without rewriting domain semantics.
 
-**Not yet implemented:** server-side opt-in research event collection, recoverable JSON import, PWA offline cold start, external TODO integrations, accounts/sync, or clinical/behavioral effectiveness validation. Detailed accessibility, mobile Safari and low-end device QA remain release gates.
+**Not yet implemented:** production server-side opt-in research event collection (reference loopback-only HTTP service exists, but is not connected), recoverable JSON import, PWA offline cold start, external TODO integrations, accounts/sync, or clinical/behavioral effectiveness validation. Detailed accessibility, mobile Safari and low-end device QA remain release gates.
 
 **License:** No open-source license has been selected. Public source visibility is not a license grant; choose and add a license before inviting external reuse.
