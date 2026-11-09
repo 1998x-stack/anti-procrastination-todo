@@ -34,6 +34,14 @@ for addr in $SF_BIND; do
     echo "  FAIL publish missing                                ${addr}:${SF_PORT}"; FAILURES=$((FAILURES+1))
   fi
 done
+# Verifying only requested addresses is insufficient: reject unexpected
+# additional public bindings (e.g. 0.0.0.0 beside an expected loopback bind).
+EXPECTED_PORTS=""
+for addr in $SF_BIND; do EXPECTED_PORTS+="$addr:$SF_PORT"$'\n'; done
+EXPECTED_PORTS="$(printf '%s' "$EXPECTED_PORTS" | LC_ALL=C sort)"
+ACTUAL_PORTS="$(docker port "$SF_CONTAINER" 80/tcp 2>/dev/null | LC_ALL=C sort)"
+check "no unexpected exposed bind addresses" "$EXPECTED_PORTS" "$ACTUAL_PORTS"
+
 # Make an intentional LAN exposure visible instead of silently normalising it.
 for addr in $SF_BIND; do
   case "$addr" in

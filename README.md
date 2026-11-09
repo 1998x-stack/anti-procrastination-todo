@@ -21,7 +21,7 @@
 | Reliable local data | IndexedDB atomic snapshot transactions; v2 pre/post-commit snapshot invariants, duplicate-command guard, cross-tab conflict prevention, JSON export and deletion |
 | Privacy | Task text stays in this browser; no account or active telemetry. Optional loopback-only research API reference is separate and not deployed |
 | Calm Focus UI v2 | Warm editorial layout, four-stage guide, blocker cards, calm circular session timer, descriptive review, responsive mobile UI and persistent visual theme |
-| Deployable | No-build static artifact + versioned releases, atomic `current` switch, nginx security headers, 27 health checks, verified rollback and deployment-level browser verification |
+| Deployable | No-build static artifact + versioned releases, atomic `current` switch, nginx security headers, 28 health checks, verified rollback and deployment-level browser verification |
 
 **Honest limitations:** Browser data may be erased by clearing site storage or private browsing. Exported JSON is a portable snapshot but **import/restore is not implemented yet**. Switching away from the page pauses confirmed foreground time; time in another app is not treated as verified work. No cloud sync, AI API, scheduled reminders or server-side research metrics are running.
 
@@ -60,9 +60,14 @@ The app is a no-build static site, so the deployment target is a plain static fi
 ~~~bash
 npm run deploy:linux        # build release + atomic switch + nginx -t + reload + 27 health checks
 npm run deploy:healthcheck  # read-only health check
+npm run test:deploy:scripts # isolated release/rollback fault-injection tests
 npm run test:e2e:deployed   # verify the ACTUAL served origin (headers, CSP, IndexedDB, full flow)
 deploy/rollback.sh --list   # rollback points
 ~~~
+
+**Follow-up PR #2:** candidate nginx preflight, archived release-specific configs, automatic restoration after failed activation, safer default rollback, and refusal to auto-delete drifted containers. CI evidence is not a substitute for re-testing the actual Ubuntu host.
+
+**Security gate:** 0.0.0.0 is not LAN-only access control. Plain HTTP permits in-transit JS modification; modified same-origin scripts could read IndexedDB. Verify firewall/TLS before real-user access (GOTCHA-024 OPEN).
 
 Full runbook: [docs/deployment-linux.md](docs/deployment-linux.md) · Operational incident handbook for the next agent: [docs/gotchas.md](docs/gotchas.md) · Latest measured results: [docs/test-report.md](docs/test-report.md).
 
