@@ -175,7 +175,56 @@ ok  服务内容与磁盘 release 的 index.html sha256 一致
 
 ---
 
-## 10. 复现本报告
+## 10. 干净代码副本重部署（已实测）
+
+按 `docs/deployment-linux.md` 从**远端分支的干净 clone** 完整重部署，使用**独立**部署根/端口/容器名以证明流程不依赖本机既有状态：
+
+```bash
+git clone --branch deploy/linux-nginx-hardening-and-fixes --single-branch \
+  https://github.com/1998x-stack/anti-procrastination-todo.git
+git rev-parse --short HEAD                       # dbe0a3e
+SF_DEPLOY_ROOT=/tmp/sf-clean/deploy-root SF_PORT=8082 SF_CONTAINER=start-first-web-clean \
+  bash deploy/deploy.sh                           # All health checks passed.
+npm ci                                            # OK（lockfile 生效）
+npm run verify                                    # 53/53
+SF_URL=http://127.0.0.1:8082 npm run test:e2e:deployed   # 9/9
+```
+
+结论：**退出码全 0**，对新 origin 的真实浏览器验证 9/9 通过。验证后已清理演练容器与临时目录（`docker rm -f start-first-web-clean`、`rm -rf /tmp/sf-clean`），并确认 8082/4317 不再监听。
+
+## 11. CI 结果（PR #1，run 42575391695）
+
+| Job | 结果 | 耗时 | 覆盖 |
+| --- | --- | --- | --- |
+| `unit-tests` | **pass** | 5 s | `npm run verify` + `benchmark:algorithm`（Node 22） |
+| `lab-api-reference` | **pass** | 6 s | `npm run verify:lab-api`（31 项） |
+| `browser-smoke` | **pass** | 45 s | `npm run test:e2e`（34 用例 + 截图 artifact） |
+| `deployment-smoke` | **pass** | 38 s | 真实 `deploy.sh` + `npm run test:e2e:deployed`（9 用例），在干净 runner 上部署并验证 |
+
+PR：<https://github.com/1998x-stack/anti-procrastination-todo/pull/1>
+
+## 12. 最终验收逐项结果（阶段 8）
+
+| # | 验收项 | 结果 | 证据 / 原因 |
+| --- | --- | --- | --- |
+| 1 | 从干净代码副本按文档可重新部署 | **PASS** | 第 10 节：干净 clone + `npm ci` + `deploy.sh` + 9/9 部署测试全通过 |
+| 2 | 本机（或授权 HTTPS）站点可真实打开 | **PASS（本机）** / HTTPS `NOT_VERIFIED` | `http://127.0.0.1:8081` 真实 Chromium 全流程通过；公网 HTTPS 无授权 |
+| 3 | 静态资源全部正确加载 | **PASS** | 健康检查 9 个资源 200 + MIME 合法；浏览器零 requestfailed、零 console error |
+| 4 | 创建任务到结束回顾完整流程成功 | **PASS** | `flow.spec.js` 黄金路径 + `deployed.spec.js` 在部署 origin 上重跑 |
+| 5 | 刷新后任务与会话数据保持正确 | **PASS** | 刷新运行中会话→安全暂停且只有 1 个会话；`activeMs` 不猜测后台时间 |
+| 6 | 无未授权的外部任务正文请求 | **PASS** | 断言所有子请求属于本站 origin；正文不出现在任何 URL 中（合成串验证） |
+| 7 | 完整 Node.js 测试通过 | **PASS** | 53/53（本机 + CI） |
+| 8 | 完整 Playwright Chromium 测试通过 | **PASS** | 34/34（本机 + CI）+ 部署 origin 9/9 |
+| 9 | 算法基准正常执行并记录环境 | **PASS** | 12,000/12,000，77.8 ms，环境见第 1 节；已声明不是用户效果证据 |
+| 10 | 研究 API 未对公网暴露 | **PASS** | 默认禁用、拒绝 production、仅 loopback（LAN 地址实测不可达）、站点上 `/api/v1/telemetry/*` 404 |
+| 11 | 重载/诊断/回滚已演练 | **PASS** | reload 零停机；回滚后服务内容与目标 release sha256 一致；stop/start 同 release 恢复 |
+| 12 | `docs/gotchas.md` 已建立、可复现、有根因证据 | **PASS** | GOTCHA-001..019，每个已复现项附最小复现与脱敏证据；推测项明确标注；未验证项标 `NOT_VERIFIED` |
+| 13 | `docs/deployment-linux.md`、`docs/test-report.md` 已完成 | **PASS** | 均已提交 |
+| 14 | Git 工作区变更清晰、无隐私信息 | **PASS** | 4 个独立提交，工作区干净；已扫描无 token/私钥/真实任务文本 |
+
+**总体状态：不声明"完全通过"。** 上表 13 项 PASS，1 项部分（第 2 项公网 HTTPS，为 `NOT_VERIFIED`），另有第 7 节列出的 7 类未验证门槛与 2 个 `OPEN` 项需产品决策。
+
+## 13. 复现本报告
 
 ```bash
 cd /home/ubuntu/codes/anti-procrastination-todo
