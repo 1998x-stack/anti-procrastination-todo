@@ -7,7 +7,11 @@
   "scripts": {
     "test": "node --test tests/*.test.js",
     "check": "node --check code/domain/core.js && node --check code/algorithm/suggest.js && node --check code/persistence/store.js && node --check code/frontend/main.js && node --check code/backend/event-schema.js",
-    "verify": "npm run check && npm test"
+    "verify": "npm run check && npm test",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
   },
   "engines": {
     "node": ">=20"
