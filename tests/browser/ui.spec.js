@@ -108,3 +108,16 @@ test("review choices remain independently labeled and do not silently finish the
   await page.getByRole("button", { name: "第一小步完成了" }).click();
   await expect(page.getByText("正在聚焦")).toBeVisible();
 });
+
+
+test("screen heading focus is announced without an oversized frame; keyboard skip link still works", async ({ page }) => {
+  await page.goto("/");
+  const heading = page.locator("h1");
+  await expect(heading).toBeFocused();
+  expect(await heading.evaluate(el => getComputedStyle(el).outlineStyle)).toBe("none");
+  const skip = page.locator(".skip-link");
+  await expect(skip).toHaveCSS("clip-path", "inset(50%)");
+  await skip.focus();
+  await expect(skip).toBeFocused();
+  await expect(skip).toHaveCSS("clip-path", "none");
+});

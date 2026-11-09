@@ -101,3 +101,13 @@ The suite emits **synthetic-content screenshots only** in \`artifacts/\` (home d
 | Dark theme | Readability option, no account required | Verify long-form CJK contrast on multiple screens |
 
 **Version notes:** v2 (2026-11-09) — visual tokens, desktop/mobile composition, first-step editor, session visuals, review hierarchy, local appearance preference and automated visual checkpoints. This release does **not** represent validated reduction in procrastination.
+
+
+## 8. Visual review follow-up (2026-11-09)
+
+After the first successful full browser run, CI screenshot artifacts were downloaded and visually examined across the desktop home, 375px mobile home, blocker editor, timer and review screens. Two issues that were not obvious from functional checks were corrected:
+
+- The previous global focus ring also styled programmatically focused \`h1/h2\` elements, making a large decorative green rectangle. Focus indication now remains on interactive controls while passive headings remain focusable for screen-reader orientation.
+- The skip link was previously merely positioned above the viewport; when full-page screenshot scroll offsets changed, its content could leak into screenshots. It now uses a visually clipped offscreen style that is restored on focus, retaining keyboard skip access.
+
+The associated Playwright regression checks enforce these rules. Visual inspection is not a substitute for WCAG assessment, and the design remains unvalidated with target users.

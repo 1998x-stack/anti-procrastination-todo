@@ -80,14 +80,19 @@ button, input, textarea { font: inherit; }
 button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 button:disabled { cursor: not-allowed; opacity: .55; }
 a { color: inherit; }
-button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible,
-[tabindex]:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 3px solid var(--focus); outline-offset: 3px;
+}
+/* Programmatically focused page headings are announced by assistive technology;
+   they are not interactive targets and should not receive a huge visual frame. */
+h1[tabindex="-1"]:focus, h2[tabindex="-1"]:focus { outline: none; }
 ::selection { background: var(--lime); color: var(--ink-strong); }
 .skip-link {
-  position: fixed; top: -130px; left: 22px; z-index: 100;
+  position: fixed; top: 0; left: 22px; z-index: 100;
+  transform: translateY(-140%); clip-path: inset(50%);
   background: var(--surface); padding: 12px 16px; border-radius: 10px;
 }
-.skip-link:focus { top: 12px; }
+.skip-link:focus { transform: translateY(12px); clip-path: none; }
 .site-header {
   max-width: 1260px; margin: 0 auto; min-height: 92px;
   padding: 20px 38px; display: flex; align-items: center; gap: 20px;
