@@ -20,6 +20,7 @@
 | Gentle reflection | Step done / partial / not started / parent task done are distinct |
 | Reliable local data | IndexedDB atomic snapshot transactions; duplicate-command guard, cross-tab conflict prevention, JSON export, explicit deletion |
 | Privacy | Task content stays in this browser; no account, task API, advertising or active telemetry backend |
+| Calm Focus UI v2 | Warm editorial layout, four-stage guide, blocker cards, calm circular session timer, descriptive review, responsive mobile UI and persistent visual theme |
 
 **Honest limitations:** Browser data may be erased by clearing site storage or private browsing. Exported JSON is a portable snapshot but **import/restore is not implemented yet**. Switching away from the page pauses confirmed foreground time; time in another app is not treated as verified work. No cloud sync, AI API, scheduled reminders or server-side research metrics are running.
 
@@ -45,7 +46,7 @@ npx playwright install chromium
 npm run test:e2e         # Local Chromium end-to-end tests
 ~~~
 
-GitHub Actions runs both suites automatically on pushes to main and on pull requests. A passing CI does not replace cross-device or real-user testing.
+GitHub Actions runs both suites automatically on pushes to main and on pull requests. UI tests also save synthetic desktop/mobile/focus/timer/review screenshots as workflow artifacts. A passing CI does not replace cross-device or real-user testing.
 
 ## Code categories / Repository map
 
@@ -64,11 +65,12 @@ GitHub Actions runs both suites automatically on pushes to main and on pull requ
 │   └── browser/                # Chromium browser flows
 ├── docs/
 │   ├── IMPLEMENTATION.md       # Phases and decisions
-│   └── TESTING.md              # Test matrix and known unverified scenarios
+│   ├── TESTING.md              # Test matrix and known unverified scenarios
+│   └── UI-DESIGN-SYSTEM.md     # Calm Focus v2 design tokens, flows and QA
 └── .github/workflows/ci.yml   # Automated validation
 ~~~
 
-See [code responsibilities](code/README.md), [implementation phases](docs/IMPLEMENTATION.md), and [testing coverage](docs/TESTING.md).
+See [code responsibilities](code/README.md), [implementation phases](docs/IMPLEMENTATION.md), [Calm Focus UI/UX design system](docs/UI-DESIGN-SYSTEM.md), and [testing coverage](docs/TESTING.md).
 
 ## Architecture
 

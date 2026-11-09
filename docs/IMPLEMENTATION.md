@@ -9,7 +9,7 @@
 | 0 · Foundation | Code taxonomy, CI, project docs | **Implemented** | Tracked code folders, Node CI and browser CI |
 | 1 · Domain + algorithm | User-selected blocker, pure transitions and safe first-step templates | **Implemented** | Unit tests, deterministic proposals, user can override |
 | 2 · Local storage | IndexedDB commit semantics, state recovery, export and delete | **Implemented core** | Browser flows, atomic mutations, cross-client concurrency; fault-injection/device QA still needed |
-| 3 · UI vertical slice | Capture → focus → editable step → short session → outcome → retry | **Implemented core** | Chromium end-to-end tests; UX/accessibility research not completed |
+| 3 · UI vertical slice | Capture → focus → editable step → short session → outcome → retry | **Implemented core + Calm Focus v2 visual iteration** | Chromium flow and visual viewport checks; UX/accessibility research not completed |
 | 4 · Optional backend and privacy telemetry | Explicit study consent, event API, deletion workflow | **Not deployed** | Strict event schema placeholder only; do not collect usage data |
 | 5 · Product validation | Interviews, randomized baseline comparison, measuring difficult-task starts | **Not started** | Must preregister metrics and recruit consenting participants |
 
@@ -24,6 +24,10 @@
 **ADR-004 — server not required.** The optional backend folder is a future strict event contract. No user title, note or step is transmitted. A deployment of telemetry would need separate verified consent and retention/delete semantics.
 
 **ADR-005 — verified vs inferred elapsed time.** The browser tracks confirmed visible-page runtime, not true human concentration. Hidden-tab time and uncertain restart time are excluded; this prevents inflated analytics but may not fit workflows that move into another app. A usability study should validate that trade-off.
+
+## UI iteration
+
+Calm Focus v2 introduces a two-column desktop inbox, descriptive blocker cards, a user-editable Step with live character counter, a low-pressure ring timer, a four-stage guide, clearer outcome cards and a persistent light/dark appearance preference. It intentionally avoids remote fonts and decorative network requests. Source: [UI design system](UI-DESIGN-SYSTEM.md). CI contains automated layout and interaction regression tests; device accessibility auditing is still required.
 
 ## Remaining high-priority work
 

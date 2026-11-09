@@ -12,8 +12,9 @@
 | Local persistence contract | npm test | Atomic memory adapter, idempotency, rollback on errors, export, wipe |
 | Event privacy contract | npm test | Strict allowed event names/fields and blocked free-text payloads |
 | Chromium E2E | npm run test:e2e | Full UI golden path, refresh recovery, bulk import/export, data deletion, XSS safe rendering, offline-after-load, concurrent local clients, edit/undo |
+| UI/UX regression (Chromium) | npm run test:e2e | 1440/375/320px visual layout, blocker selection, character counter, timer visibility, appearance persistence, outcome distinctions and synthetic screenshot checkpoints |
 
-The browser suite is run in a real Chromium instance by Playwright in GitHub Actions. No running backend is needed.
+The browser suite is run in a real Chromium instance by Playwright in GitHub Actions. Synthetic-content screenshots appear in the `ui-visual-checkpoints` workflow artifact. These are review aids and not pixel-baseline visual-diff approval. No running backend is needed.
 
 ## Expected P0 invariants
 

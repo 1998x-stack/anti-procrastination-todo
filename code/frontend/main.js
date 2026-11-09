@@ -150,7 +150,7 @@ function renderInbox() {
       escapeText(lastUndoableBatch.id) + '">撤销最近一批导入 ↶</button>' : "";
   const resume = current ? '<div class="notice"><strong>你上一次的行动还在这里。</strong> ' +
     '<button class="inline-link" data-action="resume-screen">回到这一步 →</button></div>' : "";
-  const capture = '<section class="card-panel capture-card" aria-labelledby="capture-heading">' +
+  const capture = '<section class="card-panel capture-card">' +
     '<div class="capture-head"><span class="capture-step">STEP 01 · 写下一件难事</span><span class="light-pill">不用先列计划</span></div>' +
     '<form id="capture-form"><label class="form-label" id="capture-heading" for="capture-input">今天最难开始的是什么？</label>' +
     '<input id="capture-input" class="field" maxlength="200" required autocomplete="off" placeholder="例如：回复那封迟迟没写的邮件" value="' +
