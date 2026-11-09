@@ -15,7 +15,7 @@ const prompts = {
   generic: ["🧩⚙️", "处理一件难事", "开始这个项目", "unknown task"]
 };
 const expectedKinds = Object.keys(prompts);
-const actionStart = /^(?:先|只|写|选|列|不查|把|给|用)/u;
+const actionStart = /^(?:先|只|写|选|列|不查|把|给|用|关闭)/u;
 
 test("v2 catalog has all 36 blocker×kind cells, with at least two choices", () => {
   assert.equal(RULES_VERSION, "2.0.0");

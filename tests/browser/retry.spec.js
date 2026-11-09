@@ -5,6 +5,7 @@ test("not-started review proposes a smaller retry without committing it or finis
   await page.getByLabel("今天最难开始的是什么？").fill("写年度报告");
   await page.locator("#capture-form button[type=submit]").click();
   await page.getByRole("button", { name: "事情太大" }).click();
+  await expect(page.getByRole("button", { name: "事情太大" })).toHaveAttribute("aria-pressed", "true");
   const first = await page.locator("#step-input").inputValue();
   await page.locator("#step-form button[type=submit]").click();
   await page.getByRole("button", { name: "开始这一小步" }).click();
