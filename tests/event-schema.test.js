@@ -19,3 +19,15 @@ test("unknown events and malformed attributes are rejected", () => {
   assert.throws(()=>validateEvent({...sample,attributes:[]}),/INVALID_EVENT_ATTRIBUTES/);
   assert.throws(()=>validateEvent({...sample,eventId:""}),/INVALID_EVENT_ID/);
 });
+
+test("even an allowed attribute key cannot carry personal free text", () => {
+  assert.throws(() => validateEvent({
+    ...sample, attributes: { outcome: "private customer complaint" }
+  }), /INVALID_EVENT_VALUE/);
+  assert.throws(() => validateEvent({
+    ...sample, attributes: { source: "contact alice@example.com" }
+  }), /INVALID_EVENT_VALUE/);
+  assert.throws(() => validateEvent({
+    ...sample, attributes: { confirmedActiveBucket: "1 hour at home" }
+  }), /INVALID_EVENT_VALUE/);
+});

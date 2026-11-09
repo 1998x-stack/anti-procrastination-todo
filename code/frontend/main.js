@@ -213,7 +213,7 @@ function renderReview() {
 }
 
 function renderBulk() {
-  const preview = bulkPreview ? '<div class="card-panel"><p class="form-label">确认要导入的 ' + bulkPreview.length +
+  const preview = bulkPreview ? '<div id="import-preview" class="card-panel"><p class="form-label">确认要导入的 ' + bulkPreview.length +
     ' 件任务</p><ol class="import-preview">' + bulkPreview.map(s => '<li>' + escapeText(s) + '</li>').join("") +
     '</ol><div class="cta-row"><button class="btn btn-primary" data-action="bulk-confirm">确认导入</button>' +
     '<button class="btn" data-action="bulk-cancel">返回修改</button></div></div>' : "";
@@ -405,7 +405,7 @@ settingsShortcut.addEventListener("click", async () => {
 root.addEventListener("input", event => {
   if (event.target.id === "capture-input") captureDraft = event.target.value;
   if (event.target.id === "step-input") { stepDraft = event.target.value; stepDirty = true; }
-  if (event.target.id === "bulk-input") bulkDraft = event.target.value;
+  if (event.target.id === "bulk-input") { bulkDraft = event.target.value; bulkPreview = null; document.querySelector("#import-preview")?.remove(); }
 });
 root.addEventListener("submit", async event => {
   event.preventDefault();
@@ -440,6 +440,7 @@ root.addEventListener("submit", async event => {
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden && runActive()) void stopRunning("pause").then(() => { if(!document.hidden) render(); });
+  else if (!document.hidden && storageReady) render();
 });
 window.addEventListener("pagehide", () => {
   if (runActive()) void stopRunning("pause");

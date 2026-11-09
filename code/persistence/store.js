@@ -61,7 +61,7 @@ export class IndexedStateStore {
       request.onerror = () => reject(request.error || new Error("DATABASE_OPEN_FAILED"));
       request.onsuccess = () => {
         const db = request.result;
-        db.onversionchange = () => db.close();
+        db.onversionchange = () => { db.close(); this.openPromise = null; this.listeners.forEach(fn => fn()); };
         resolve(db);
       };
     }).catch(error => {
