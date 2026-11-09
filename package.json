@@ -1,0 +1,15 @@
+{
+  "name": "start-first",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first task initiation prototype",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "check": "node --check code/domain/core.js && node --check code/algorithm/suggest.js && node --check code/persistence/store.js && node --check code/frontend/main.js && node --check code/backend/event-schema.js",
+    "verify": "npm run check && npm test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
