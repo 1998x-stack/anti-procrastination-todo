@@ -53,52 +53,7 @@ docker info >/dev/null 2>&1 || sf_die "docker daemon unavailable"
 [[ "$(docker inspect -f '{{.Config.Image}}' "$SF_CONTAINER")" == "$SF_IMAGE" ]] ||
   sf_die "container image drift"
 EXPECTED_PORTS=""
-for addr in $SF_BIND; do EXPECTED_PORTS+="$addr:$SF_PORT"
-
-# Preflight without changing the running container.
-docker run --rm --network none --entrypoint nginx \
-  -v "$ROOT:/srv/start-first:ro" \
-  -v "$TARGET_CONFIG/server.conf:/etc/nginx/conf.d/default.conf:ro" \
-  -v "$TARGET_CONFIG/headers.inc:/etc/nginx/conf.d/headers.inc:ro" \
-  -v "$TARGET_CONFIG/headers-html.conf:/etc/nginx/conf.d/headers-html.conf:ro" \
-  "$SF_IMAGE" -t >/dev/null || sf_die "target nginx config failed validation"
-
-BACKUP="$(mktemp -d "$ROOT/.rollback-backup.XXXXXXXX")"
-for config in server.conf headers.inc headers-html.conf; do
-  [[ -f "$ROOT/conf/$config" ]] || sf_die "current config missing: $config"
-  cp -p "$ROOT/conf/$config" "$BACKUP/$config"
-done
-SWITCHING=0
-restore_on_failure() {
-  local rc="$1"
-  trap - EXIT
-  if [[ "$rc" -ne 0 && "$SWITCHING" -eq 1 ]]; then
-    sf_log "rollback verification failed; returning to $CURRENT_NAME"
-    set +e
-    for config in server.conf headers.inc headers-html.conf; do
-      install -m 0644 "$BACKUP/$config" "$ROOT/conf/$config"
-    done
-    ln -sfn "$CURRENT_LINK" "$ROOT/current.new"
-    mv -Tf "$ROOT/current.new" "$ROOT/current"
-    docker exec "$SF_CONTAINER" nginx -t &&
-      docker exec "$SF_CONTAINER" nginx -s reload
-  fi
-  rm -rf -- "$BACKUP"
-  exit "$rc"
-}
-trap 'restore_on_failure $?' EXIT
-SWITCHING=1
-for config in server.conf headers.inc headers-html.conf; do
-  install -m 0644 "$TARGET_CONFIG/$config" "$ROOT/conf/$config"
-done
-ln -sfn "releases/$TARGET" "$ROOT/current.new"
-mv -Tf "$ROOT/current.new" "$ROOT/current"
-docker exec "$SF_CONTAINER" nginx -t
-docker exec "$SF_CONTAINER" nginx -s reload
-"$SF_REPO_ROOT/deploy/healthcheck.sh"
-SWITCHING=0
-sf_log "rolled back from $CURRENT_NAME to $TARGET (including nginx config)"
-\n'; done
+for addr in $SF_BIND; do EXPECTED_PORTS+="$addr:$SF_PORT"$'\n'; done
 EXPECTED_PORTS="$(printf '%s' "$EXPECTED_PORTS" | LC_ALL=C sort)"
 [[ "$(docker port "$SF_CONTAINER" 80/tcp | LC_ALL=C sort)" == "$EXPECTED_PORTS" ]] ||
   sf_die "container port drift"
