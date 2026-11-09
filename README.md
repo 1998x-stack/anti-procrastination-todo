@@ -21,6 +21,7 @@
 | Reliable local data | IndexedDB atomic snapshot transactions; v2 pre/post-commit snapshot invariants, duplicate-command guard, cross-tab conflict prevention, JSON export and deletion |
 | Privacy | Task text stays in this browser; no account or active telemetry. Optional loopback-only research API reference is separate and not deployed |
 | Calm Focus UI v2 | Warm editorial layout, four-stage guide, blocker cards, calm circular session timer, descriptive review, responsive mobile UI and persistent visual theme |
+| Deployable | No-build static artifact + versioned releases, atomic `current` switch, nginx security headers, 27 health checks, verified rollback and deployment-level browser verification |
 
 **Honest limitations:** Browser data may be erased by clearing site storage or private browsing. Exported JSON is a portable snapshot but **import/restore is not implemented yet**. Switching away from the page pauses confirmed foreground time; time in another app is not treated as verified work. No cloud sync, AI API, scheduled reminders or server-side research metrics are running.
 
@@ -38,16 +39,34 @@ python3 -m http.server 4173
 Automated unit tests require Node.js 20+; browser tests use a development-only Playwright dependency:
 
 ~~~bash
+npm ci                   # uses the committed package-lock.json
 npm test                 # Node.js domain, algorithm, persistence-contract and privacy schema tests
 npm run check            # Syntax checks
 npm run verify           # Syntax + unit tests
 npm run benchmark:algorithm  # 12,000 synthetic suggestion/classification calls
-npm install
-npx playwright install chromium
-npm run test:e2e         # Local Chromium end-to-end tests
+npx playwright install chromium   # first run on a new machine (browser build must match @playwright/test)
+npm run test:e2e         # Local Chromium end-to-end tests (dev harness on 127.0.0.1:4173)
+npm run verify:lab-api   # Lab-only research API checks (temporarily listens on 127.0.0.1:4317)
 ~~~
 
-GitHub Actions runs Node unit/contract tests, Chromium E2E and an informational algorithm microbenchmark on pushes to main and on pull requests. UI tests also save synthetic desktop/mobile/focus/timer/review screenshots as workflow artifacts. A passing CI does not replace cross-device or real-user testing.
+If the browser tests report `browserType.launch: Executable doesn't exist`, that is a **missing browser download, not a product failure** — run `npx playwright install chromium` first. See [gotchas](docs/gotchas.md) GOTCHA-006.
+
+GitHub Actions runs Node unit/contract tests, Chromium E2E, an informational algorithm microbenchmark, the lab-only research API checks and a real **deployment smoke** (build release → nginx container → verify the served origin) on pushes to main and on pull requests. UI tests also save synthetic desktop/mobile/focus/timer/review screenshots as workflow artifacts. A passing CI does not replace cross-device or real-user testing.
+
+## Deploy on Linux (static site)
+
+The app is a no-build static site, so the deployment target is a plain static file server. This repository ships a reviewed, versioned deployment: an nginx container publishing an immutable release directory behind a `current` symlink, bound to **127.0.0.1 only** unless a public origin is explicitly authorized.
+
+~~~bash
+npm run deploy:linux        # build release + atomic switch + nginx -t + reload + 27 health checks
+npm run deploy:healthcheck  # read-only health check
+npm run test:e2e:deployed   # verify the ACTUAL served origin (headers, CSP, IndexedDB, full flow)
+deploy/rollback.sh --list   # rollback points
+~~~
+
+Full runbook: [docs/deployment-linux.md](docs/deployment-linux.md) · Operational incident handbook for the next agent: [docs/gotchas.md](docs/gotchas.md) · Latest measured results: [docs/test-report.md](docs/test-report.md).
+
+**Loopback-first is deliberate:** `crypto.randomUUID()` and other secure-context APIs require HTTPS or localhost, and IndexedDB is isolated per origin. A public deployment must terminate HTTPS before it is exposed; see gotchas GOTCHA-005 and GOTCHA-018.
 
 ## Code categories / Repository map
 
@@ -63,11 +82,17 @@ GitHub Actions runs Node unit/contract tests, Chromium E2E and an informational 
 │   └── backend/                # Local-only opt-in event reference server + SQL plan; not deployed
 ├── tests/
 │   ├── *.test.js               # Node unit and contract tests
-│   └── browser/                # Chromium browser flows
+│   ├── browser/                # Chromium browser flows
+│   └── deployed/               # Verification of the real deployed origin
+├── deploy/                     # Linux deployment scripts + nginx config
+├── scripts/                    # Benchmark and lab-only API verification
 ├── docs/
 │   ├── IMPLEMENTATION.md       # Phases and decisions
 │   ├── TESTING.md              # Test matrix and known unverified scenarios
-│   └── UI-DESIGN-SYSTEM.md     # Calm Focus v2 design tokens, flows and QA
+│   ├── UI-DESIGN-SYSTEM.md     # Calm Focus v2 design tokens, flows and QA
+│   ├── deployment-linux.md     # Deployment runbook (topology, rollback, HTTPS)
+│   ├── gotchas.md              # Incident/root-cause handbook for the next agent
+│   └── test-report.md          # Dated results, environment and unverified gates
 └── .github/workflows/ci.yml   # Automated validation
 ~~~
 

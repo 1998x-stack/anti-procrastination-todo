@@ -9,6 +9,10 @@
     "check": "node --check code/domain/core.js && node --check code/algorithm/suggest.js && node --check code/persistence/store.js && node --check code/persistence/invariants.js && node --check code/frontend/main.js && node --check code/backend/event-schema.js && node --check code/backend/telemetry-service.js && node --check code/backend/server.js && node --check code/backend/dev-server.js",
     "verify": "npm run check && npm test",
     "test:e2e": "playwright test",
+    "test:e2e:deployed": "playwright test --config=playwright.deploy.config.js",
+    "verify:lab-api": "node scripts/verify-lab-api.mjs",
+    "deploy:linux": "bash deploy/deploy.sh",
+    "deploy:healthcheck": "bash deploy/healthcheck.sh",
     "benchmark:algorithm": "node scripts/benchmark-algorithm.mjs"
   },
   "devDependencies": {

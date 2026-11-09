@@ -39,3 +39,35 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 7
+
+  lab-api-reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Verifies the opt-in gate, loopback-only bind and token separation of the
+      # lab-only research reference API. It must never be deployed.
+      - run: npm run verify:lab-api
+
+  deployment-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SF_DEPLOY_ROOT: ${{ github.workspace }}/.deploy
+      SF_PORT: '8081'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: bash deploy/deploy.sh
+      # After a real deploy: served bytes, enforced CSP, secure-context IndexedDB
+      # and the full user flow against the deployed origin.
+      - run: npm run test:e2e:deployed
+      - if: always()
+        run: bash deploy/serve.sh logs 200 || true

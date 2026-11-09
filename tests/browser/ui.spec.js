@@ -110,6 +110,34 @@ test("review choices remain independently labeled and do not silently finish the
 });
 
 
+test("no horizontal overflow on any screen at 320px", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  const overflow = () => page.evaluate(() => ({
+    doc: document.documentElement.scrollWidth - window.innerWidth,
+    body: document.body.scrollWidth - window.innerWidth
+  }));
+  await page.goto("/");
+  await expect(page.locator("#app")).toHaveAttribute("data-screen", "inbox");
+  expect(await overflow()).toEqual({ doc: 0, body: 0 });
+
+  await page.getByLabel("今天最难开始的是什么？").fill("窄屏全流程检查");
+  await page.locator("#capture-form button[type=submit]").click();
+  await expect(page.locator("#app")).toHaveAttribute("data-screen", "focus");
+  expect(await overflow()).toEqual({ doc: 0, body: 0 });
+
+  await page.locator("#step-form button[type=submit]").click();
+  await expect(page.locator("#app")).toHaveAttribute("data-screen", "ready");
+  expect(await overflow()).toEqual({ doc: 0, body: 0 });
+
+  await page.getByRole("button", { name: "开始这一小步" }).click();
+  await expect(page.locator("#app")).toHaveAttribute("data-screen", "timer");
+  expect(await overflow()).toEqual({ doc: 0, body: 0 });
+
+  await page.getByRole("button", { name: "结束并回顾" }).click();
+  await expect(page.locator("#app")).toHaveAttribute("data-screen", "review");
+  expect(await overflow()).toEqual({ doc: 0, body: 0 });
+});
+
 test("screen heading focus is announced without an oversized frame; keyboard skip link still works", async ({ page }) => {
   await page.goto("/");
   const heading = page.locator("h1");

@@ -84,7 +84,21 @@ function flowSteps(stage) {
 }
 
 
-function uuid() { return crypto.randomUUID(); }
+function uuid() {
+  // crypto.randomUUID() requires a secure context (https or localhost). A plain
+  // HTTP origin on a real hostname does not have it, and calling it there threw
+  // an unhandled TypeError that made task creation fail silently.
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    // crypto.getRandomValues() is available in non-secure contexts too.
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
+    return hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" + hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" + hex.slice(20);
+  }
+  throw new Error("CRYPTO_UNAVAILABLE");
+}
 function now() { return Date.now(); }
 function escapeText(text) {
   return String(text ?? "").replace(/[&<>"']/g, ch => ({
@@ -362,6 +376,13 @@ function render() {
     root.innerHTML = '<div class="notice error" role="alert">本地存储不可用。为了避免误以为已经保存，当前无法创建任务。请检查浏览器隐私设置或尝试常规窗口。</div>';
     return;
   }
+  // A refresh caused by another tab (BroadcastChannel) or by the timer must not
+  // steal focus or the caret from someone who is actively typing. Record the
+  // focused field, then restore it when the same screen is re-rendered.
+  const focused = document.activeElement;
+  const caret = focused && focused !== document.body && root.contains(focused) && focused.id
+    ? { id: focused.id, start: focused.selectionStart ?? null, end: focused.selectionEnd ?? null }
+    : null;
   if (screen === "focus") renderFocus();
   else if (screen === "ready") renderReady();
   else if (screen === "timer") renderTimer();
@@ -375,6 +396,14 @@ function render() {
     if (heading) {
       heading.setAttribute("tabindex", "-1");
       requestAnimationFrame(() => { if (heading.isConnected) heading.focus({ preventScroll: true }); });
+    }
+  } else if (caret) {
+    const next = root.querySelector('[id="' + caret.id + '"]');
+    if (next) {
+      next.focus({ preventScroll: true });
+      if (caret.start !== null && typeof next.setSelectionRange === "function") {
+        try { next.setSelectionRange(caret.start, caret.end ?? caret.start); } catch { /* field type without text selection */ }
+      }
     }
   }
 }
@@ -392,17 +421,41 @@ async function persist(change) {
   }
 }
 
+let stopInFlight = null;
+/**
+ * Stop the running session exactly once, even when several triggers race:
+ * the pause button, a tab-visibility change, page unload and the periodic
+ * checkpoint can all ask for the same stop within the same few milliseconds.
+ * Without this guard the losing request re-applies `pauseSession` to an already
+ * paused session, which throws SESSION_NOT_RUNNING and shows a false
+ * "not saved" error even though the first transaction committed.
+ */
 async function stopRunning(purpose) {
-  if (checkpointPromise) await checkpointPromise;
+  if (stopInFlight) await stopInFlight.catch(() => { /* first request owns the error */ });
   const session = getSession();
-  if (!session || session.status !== "running") return false;
-  const delta = timerAnchor === null ? 0 : Math.max(0, Math.round(performance.now() - timerAnchor));
-  const id = session.id;
-  let ok;
-  if (purpose === "pause") ok = await persist(s => { pauseSession(s, id, delta); });
-  else ok = await persist(s => { endSession(s, id, delta, now()); });
-  if (ok) timerAnchor = null;
-  return ok;
+  if (!session) return true;
+  if (purpose === "pause" && session.status !== "running") return true;
+  if (purpose === "end" && session.status === "ended") return true;
+  const run = (async () => {
+    if (checkpointPromise) await checkpointPromise;
+    const current = getSession();
+    if (!current) return true;
+    const delta = timerAnchor === null ? 0 : Math.max(0, Math.round(performance.now() - timerAnchor));
+    let ok;
+    if (current.status === "running") {
+      ok = purpose === "pause"
+        ? await persist(s => { pauseSession(s, current.id, delta); })
+        : await persist(s => { endSession(s, current.id, delta, now()); });
+    } else if (current.status === "paused" && purpose === "end") {
+      ok = await persist(s => { endSession(s, current.id, 0, now()); });
+    } else {
+      ok = true;  // already in the requested state; nothing left to write
+    }
+    if (ok) timerAnchor = null;
+    return ok;
+  })();
+  stopInFlight = run;
+  try { return await run; } finally { if (stopInFlight === run) stopInFlight = null; }
 }
 
 async function checkpoint() {
@@ -475,10 +528,10 @@ async function onAction(action, id) {
     const current = getSession();
     if (current && await persist(s => { resumeSession(s, current.id); })) timerAnchor=performance.now();
   } else if (action === "end-session") {
-    const session = getSession();
-    if (!session) return;
-    if (session.status === "running" && !(await stopRunning("end"))) return;
-    if (session.status === "paused" && !(await persist(s => { endSession(s,session.id,0,now()); }))) return;
+    // `end` must also close a session that was only paused, and it must re-read
+    // fresh state instead of a reference captured before an awaited write.
+    if (!getSession()) return;
+    if (!(await stopRunning("end"))) return;
     screen = "review";
   } else if (action === "resume-screen") {
     screen = getSession()?.status === "ended" ? "review" : "timer";
@@ -537,7 +590,12 @@ root.addEventListener("click", async event => {
   if (button.disabled) return;
   button.disabled=true;
   try { await onAction(button.dataset.action, button.dataset.id); }
-  finally { if (button.isConnected) button.disabled=false; }
+  catch (error) {
+    // Never let an unexpected exception become a silent no-op: the user must
+    // know that nothing was saved.
+    setNotice("操作没有完成（" + (error instanceof Error ? error.message : "UNKNOWN_ERROR") + "）。输入内容仍保留，可以重试。", true);
+  }
+  finally { if (button.isConnected) button.disabled=false; render(); }
 });
 settingsShortcut.addEventListener("click", async () => {
   if (runActive()) {
@@ -556,33 +614,44 @@ root.addEventListener("input", event => {
   }
   if (event.target.id === "bulk-input") { bulkDraft = event.target.value; bulkPreview = null; document.querySelector("#import-preview")?.remove(); }
 });
+const formsInFlight = new Set();
 root.addEventListener("submit", async event => {
   event.preventDefault();
   const form=event.target;
+  // Implicit submission (Enter) and requestSubmit() still fire a submit event
+  // even while the submit button is disabled, so the button flag alone cannot
+  // prevent a duplicate submission of one user intent.
+  if (formsInFlight.has(form.id)) return;
+  formsInFlight.add(form.id);
   const submit=form.querySelector('button[type="submit"]');
   if (submit) submit.disabled=true;
   try {
     if (form.id === "capture-form") {
-      captureDraft = form.querySelector("#capture-input").value;
+      // Capture the title in a local binding: the persisted command must not
+      // re-read module state that a concurrent success handler can clear.
+      const title = form.querySelector("#capture-input").value;
+      captureDraft = title;
       const id = uuid(), timestamp=now();
-      if (await persist(s => { createTask(s,{id,title:captureDraft,now:timestamp}); focusTask(s,id,timestamp); })) {
+      if (await persist(s => { createTask(s,{id,title,now:timestamp}); focusTask(s,id,timestamp); })) {
         captureDraft=""; suggestionIndex=0; loadDraft(); screen="focus";
       }
     } else if (form.id === "edit-task-form") {
-      editDraft = form.querySelector("#edit-task-input").value;
+      const title = form.querySelector("#edit-task-input").value;
+      editDraft = title;
       const id = editingTaskId, expectedUpdatedAt = editingUpdatedAt;
       if (id && await persist(s => {
-        editTask(s,id,{title:editDraft,expectedUpdatedAt,now:now()});
+        editTask(s,id,{title,expectedUpdatedAt,now:now()});
       })) {
         editingTaskId=null; editDraft=""; editingUpdatedAt=null;
         setNotice("任务标题已保存。");
       }
     } else if (form.id === "step-form") {
-      stepDraft = form.querySelector("#step-input").value;
+      const text = form.querySelector("#step-input").value;
+      stepDraft = text;
       const task=getTask(), id=uuid(), timestamp=now();
       const origin=stepDirty ? "manual" : "template";
       const templateId=stepDirty ? null : (currentSuggestion ?? proposeStep({title:task.title,blocker:task.blocker,index:suggestionIndex})).templateId;
-      if (await persist(s => { confirmStep(s,{id,taskId:task.id,text:stepDraft,source:origin,templateId,now:timestamp}); })) {
+      if (await persist(s => { confirmStep(s,{id,taskId:task.id,text,source:origin,templateId,now:timestamp}); })) {
         chosenMinutes=5; screen="ready";
       }
     } else if (form.id === "bulk-form") {
@@ -590,7 +659,12 @@ root.addEventListener("submit", async event => {
       try { bulkPreview = parseBulk(bulkDraft); setNotice(""); }
       catch(error) { setNotice("请输入 1～20 行有效任务，每行最多 200 个字符。",true); }
     }
+  } catch (error) {
+    // A thrown error (e.g. an unavailable browser API) must be surfaced, not
+    // swallowed into an apparent no-op.
+    setNotice("操作没有完成（" + (error instanceof Error ? error.message : "UNKNOWN_ERROR") + "）。输入内容仍保留，可以重试。", true);
   } finally {
+    formsInFlight.delete(form.id);
     if (submit?.isConnected) submit.disabled=false;
     render();
   }
