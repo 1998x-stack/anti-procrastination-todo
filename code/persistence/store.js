@@ -14,7 +14,7 @@ function applyCommand(state, command, commandId) {
   if (state.appliedCommands.includes(commandId)) return state;
   const draft = structuredClone(state);
   const output = command(draft);
-  const next = output && typeof output === "object" ? output : draft;
+  const next = output && output.schemaVersion === 1 && Array.isArray(output.tasks) && Array.isArray(output.sessions) ? output : draft;
   next.revision = state.revision + 1;
   next.appliedCommands = [...state.appliedCommands, commandId].slice(-COMMAND_LIMIT);
   return next;
