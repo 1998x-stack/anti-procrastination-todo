@@ -1,22 +1,39 @@
-# Implementation phases and quality gates
+# Start-First implementation record
 
-The source-of-truth product requirements live at [1998X Projects](https://github.com/1998x-stack/projects/tree/main/projects/productivity/anti-procrastination-todo).
+**Code repository:** https://github.com/1998x-stack/anti-procrastination-todo  
+**Product documentation:** https://github.com/1998x-stack/projects/tree/main/projects/productivity/anti-procrastination-todo  
+**Record date:** 2026-11-09 · **Stage:** Runnable technical prototype, not launched product.
 
-| Phase | Deliverable | Required check | Status |
+| Phase | Expected capability | Current implementation | Evidence / next gate |
 | --- | --- | --- | --- |
-| 0 | Code taxonomy, scripts, CI scaffold | All linked folders have tracked files | Implemented |
-| 1 | Pure domain model + rule-based start suggestions | Node unit tests for invariants and edge cases | In progress |
-| 2 | IndexedDB transactional snapshot repository | Persistence, conflict and save-failure checks | In progress |
-| 3 | Accessible local-first UI golden path | Browser flow, refresh, pause and outcome verification | In progress |
-| 4 | Privacy, telemetry, optional backend | Explicit opt-in and separate backend/security review | Not implemented |
-| 5 | User research and comparative experiment | Informed consent, preregistered behavioral endpoints | Not started |
+| 0 · Foundation | Code taxonomy, CI, project docs | **Implemented** | Tracked code folders, Node CI and browser CI |
+| 1 · Domain + algorithm | User-selected blocker, pure transitions and safe first-step templates | **Implemented** | Unit tests, deterministic proposals, user can override |
+| 2 · Local storage | IndexedDB commit semantics, state recovery, export and delete | **Implemented core** | Browser flows, atomic mutations, cross-client concurrency; fault-injection/device QA still needed |
+| 3 · UI vertical slice | Capture → focus → editable step → short session → outcome → retry | **Implemented core** | Chromium end-to-end tests; UX/accessibility research not completed |
+| 4 · Optional backend and privacy telemetry | Explicit study consent, event API, deletion workflow | **Not deployed** | Strict event schema placeholder only; do not collect usage data |
+| 5 · Product validation | Interviews, randomized baseline comparison, measuring difficult-task starts | **Not started** | Must preregister metrics and recruit consenting participants |
 
-## Scope and intentional deviations
+## Technical decisions
 
-Initial prototype uses **zero-dependency browser ES modules**, instead of introducing React/TypeScript immediately. This is a reversible engineering decision: clean `algorithm/domain/persistence/frontend` module boundaries retain the PRD's responsibility split, and a React migration can later replace only the rendering layer. The first priority is a testable product loop rather than framework complexity.
+**ADR-001 — ship a no-build browser prototype first.** The prior frontend design suggests React + TypeScript + Vite. This first vertical slice deliberately uses native ES Modules, CSS and Node's built-in test runner to ensure the task-start loop is executable with no runtime dependency or API. The cost is weaker static typing and a custom UI rendering layer. Migrate to React/TS if continued product investment justifies it; do not call this a completion of the original React code plan.
 
-P0 user task data stays in IndexedDB; the server-side telemetry design remains a proposal. This code is **not medical treatment**, and no behavior improvement has been measured.
+**ADR-002 — IndexedDB as the only source of truth.** Business objects are atomically persisted in a single versioned snapshot. It is appropriate for an early single-device product, not a claim of arbitrary-scale performance. The model enforces a single running/paused session. Stored command IDs are bounded to avoid indefinite growth.
 
-## Definition of done
+**ADR-003 — no LLM for P0.** User-selected blocker and deterministic templates must provide a safe editable step. An online assistant requires new consent, privacy review, cost budgets and a controlled improvement experiment.
 
-Changes must retain task/step distinction, no accidental task completion, an explicit save confirmation, no private text in network requests, and no repeated session start after double clicks. CI runs `npm run verify`. A passing unit suite does not establish browser compatibility or user outcome improvement.
+**ADR-004 — server not required.** The optional backend folder is a future strict event contract. No user title, note or step is transmitted. A deployment of telemetry would need separate verified consent and retention/delete semantics.
+
+**ADR-005 — verified vs inferred elapsed time.** The browser tracks confirmed visible-page runtime, not true human concentration. Hidden-tab time and uncertain restart time are excluded; this prevents inflated analytics but may not fit workflows that move into another app. A usability study should validate that trade-off.
+
+## Remaining high-priority work
+
+- Restore/import JSON snapshots with schema validation and conflict strategy.
+- Stronger fault-injection QA for quota exhaustion, interrupted browser upgrade and schema migration; multi-device Safari/Firefox manual testing.
+- Extend undo beyond the most recent unstarted batch, add richer Task editing while preserving version checks.
+- Keyboard and screen-reader audit against WCAG 2.2 AA on real assistive technology.
+- Prove the prototype's effect on difficult-task start rate against a simpler baseline; measure pressure complaints.
+- Only after evidence: consider AI suggestions, task-manager integration, cross-device account/sync.
+
+## Engineering release discipline
+
+The repository can be run locally and tested through CI. **Do not market as a finished product** until browser/device tests, privacy review and user-study gates pass. Use GitHub issues/PRs for individual remaining items. No retention, conversion, medical or user-outcome data has been measured.

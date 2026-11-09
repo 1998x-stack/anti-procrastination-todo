@@ -86,6 +86,30 @@ export function importTasks(state, { lines, ids, batchId, now }) {
   return made;
 }
 
+/** Edit task with an optimistic version guard; no silent cross-tab overwrite. */
+export function editTask(state, taskId, { title, note, expectedUpdatedAt, now }) {
+  const task = taskById(state, taskId);
+  ensure(task.updatedAt === expectedUpdatedAt, "STALE_TASK_EDIT");
+  ensure(task.status !== "archived" && task.status !== "done", "TASK_NOT_AVAILABLE");
+  task.title = validateTaskText(title, note ?? task.note);
+  if (note !== undefined) task.note = String(note);
+  task.updatedAt = Math.max(now, task.updatedAt + 1);
+  return task;
+}
+
+/** Undo a recent bulk import only if none of its tasks has begun a session. */
+export function undoImport(state, batchId, now) {
+  const batch = state.batches.find(item => item.id === batchId);
+  ensure(Boolean(batch) && !batch.undoneAt, "BATCH_NOT_FOUND");
+  const ids = new Set(batch.taskIds);
+  ensure(!state.sessions.some(session => ids.has(session.taskId)), "BATCH_HAS_SESSIONS");
+  ensure(!state.steps.some(step => ids.has(step.taskId)), "BATCH_HAS_STEPS");
+  state.tasks = state.tasks.filter(task => !ids.has(task.id));
+  if (state.activeTaskId && ids.has(state.activeTaskId)) state.activeTaskId = null;
+  batch.undoneAt = now;
+  return batch;
+}
+
 export function focusTask(state, taskId, now) {
   ensure(!state.activeSessionId, "SESSION_NEEDS_REVIEW");
   const selected = taskById(state, taskId);

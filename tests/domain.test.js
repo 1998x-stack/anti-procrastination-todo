@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   emptyState, createTask, importTasks, parseBulk, focusTask, setBlocker,
   confirmStep, startSession, pauseSession, resumeSession, checkpointSession,
-  interruptSession, endSession, recordOutcome, archiveTask
+  interruptSession, endSession, recordOutcome, archiveTask, editTask, undoImport
 } from "../code/domain/core.js";
 
 const base = () => {
@@ -122,4 +122,29 @@ test("time deltas are validated and archival is distinct from completion", () =>
   archiveTask(s,"task1",303);
   assert.equal(s.tasks[0].status,"archived");
   assert.equal(s.steps[0].status,"attempted");
+});
+
+
+test("task edit checks optimistic version and preserves history", () => {
+  const s=base();
+  const before=s.tasks[0].updatedAt;
+  editTask(s,"task1",{title:"更明确的任务标题",expectedUpdatedAt:before,now:103});
+  assert.equal(s.tasks[0].title,"更明确的任务标题");
+  assert.ok(s.tasks[0].updatedAt>before);
+  assert.throws(() => editTask(s,"task1",{title:"过期修改",expectedUpdatedAt:before,now:110}), /STALE_TASK_EDIT/);
+});
+
+test("undo import removes only untouched batch tasks and never completed work", () => {
+  const s=emptyState();
+  importTasks(s,{lines:["整理桌面","写日报"],ids:["t1","t2"],batchId:"batch1",now:1});
+  createTask(s,{id:"old",title:"原有任务",now:1});
+  undoImport(s,"batch1",2);
+  assert.deepEqual(s.tasks.map(x=>x.id),["old"]);
+  assert.throws(()=>undoImport(s,"batch1",3),/BATCH_NOT_FOUND/);
+
+  const other=emptyState();
+  importTasks(other,{lines:["写日报"],ids:["t3"],batchId:"batch2",now:1});
+  focusTask(other,"t3",2);
+  confirmStep(other,{id:"step3",taskId:"t3",text:"写标题",now:3});
+  assert.throws(()=>undoImport(other,"batch2",4),/BATCH_HAS_STEPS/);
 });

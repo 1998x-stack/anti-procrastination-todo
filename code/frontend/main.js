@@ -2,7 +2,7 @@ import {
   emptyState, BLOCKERS, OUTCOMES, createTask, importTasks, parseBulk,
   focusTask, setBlocker, confirmStep, startSession, pauseSession,
   resumeSession, checkpointSession, interruptSession, endSession,
-  recordOutcome, archiveTask
+  recordOutcome, archiveTask, editTask, undoImport
 } from "../domain/core.js";
 import { proposeStep } from "../algorithm/suggest.js";
 import { IndexedStateStore, createExport } from "../persistence/store.js";
@@ -23,6 +23,9 @@ let suggestionIndex = 0;
 let chosenMinutes = 5;
 let bulkDraft = "";
 let bulkPreview = null;
+let editingTaskId = null;
+let editDraft = "";
+let editingUpdatedAt = null;
 let timerAnchor = null;
 let checkpointPromise = null;
 let timerVisible = true;
@@ -87,13 +90,25 @@ function loadDraft() {
 function renderInbox() {
   const current = getSession();
   const list = state.tasks.filter(t => t.status !== "done" && t.status !== "archived");
-  const cards = list.map(task => (
-    '<article class="task-item"><div><div class="task-name">' + escapeText(task.title) +
-    '</div><div class="task-meta">' + (task.status === "active" ? "正在聚焦" : "等待开始") +
-    '</div></div><div class="task-controls"><button class="small-button" data-action="focus" data-id="' +
-    escapeText(task.id) + '">帮我开始 ↗</button><button class="small-button" data-action="archive" data-id="' +
-    escapeText(task.id) + '">归档</button></div></article>'
-  )).join("");
+  const cards = list.map(task => {
+    if (editingTaskId === task.id) {
+      return '<form class="task-item" id="edit-task-form"><label class="form-label" for="edit-task-input">修改任务标题</label>' +
+        '<input id="edit-task-input" class="field" required maxlength="200" value="' + escapeText(editDraft) + '">' +
+        '<div class="task-controls"><button type="submit" class="small-button">保存修改</button>' +
+        '<button type="button" class="small-button" data-action="cancel-edit">取消</button></div></form>';
+    }
+    return '<article class="task-item"><div><div class="task-name">' + escapeText(task.title) +
+      '</div><div class="task-meta">' + (task.status === "active" ? "正在聚焦" : "等待开始") +
+      '</div></div><div class="task-controls"><button class="small-button" data-action="focus" data-id="' +
+      escapeText(task.id) + '">帮我开始 ↗</button><button class="small-button" data-action="edit-task" data-id="' +
+      escapeText(task.id) + '">编辑</button><button class="small-button" data-action="archive" data-id="' +
+      escapeText(task.id) + '">归档</button></div></article>';
+  }).join("");
+  const lastUndoableBatch = [...state.batches].reverse().find(batch =>
+    !batch.undoneAt && !state.steps.some(step => batch.taskIds.includes(step.taskId)));
+  const undoButton = lastUndoableBatch ?
+    '<button class="btn btn-quiet" type="button" data-action="undo-import" data-id="' +
+      escapeText(lastUndoableBatch.id) + '">撤销最近一批导入 ↶</button>' : "";
   const resume = current ? '<div class="notice"><strong>上次的短行动还在这里。</strong> ' +
     '<button class="inline-link" data-action="resume-screen">回到这一步 →</button></div>' : "";
   shell(
@@ -102,7 +117,7 @@ function renderInbox() {
     '<input id="capture-input" class="field" maxlength="200" required placeholder="例如：回复那封迟迟没写的邮件" value="' +
     escapeText(captureDraft) + '"><div class="cta-row"><button class="btn btn-primary btn-wide-mobile" type="submit">帮我开始 <span aria-hidden="true">↗</span></button>' +
     '<button class="btn btn-quiet" type="button" data-action="bulk-screen">从其他清单粘贴</button></div></form></section>' +
-    '<section><div class="section-title">你的待开始清单 · ' + list.length + '</div>' + resume +
+    '<section><div class="section-title">你的待开始清单 · ' + list.length + '</div>' + undoButton + resume +
     (cards ? '<div class="task-list">' + cards + '</div>' : '<p class="empty">这里暂时没有任务。先写下你想开始的一件事。</p>') +
     '</section><p class="small-note" style="margin-top:28px">你的任务只保存在此浏览器。删除浏览器数据或换设备后可能无法恢复，建议定期导出。</p>'
   );
@@ -313,6 +328,15 @@ async function onAction(action, id) {
     else if (await persist(s => { focusTask(s, id, now()); })) {
       suggestionIndex = 0; loadDraft(); screen = "focus";
     }
+  } else if (action === "edit-task") {
+    const task = state.tasks.find(t => t.id === id);
+    if (!task) return;
+    editingTaskId = id; editDraft = task.title; editingUpdatedAt = task.updatedAt;
+  } else if (action === "cancel-edit") {
+    editingTaskId = null; editDraft = ""; editingUpdatedAt = null;
+  } else if (action === "undo-import") {
+    if (!window.confirm("撤销最近一批未开始的导入任务？")) return;
+    if (await persist(s => { undoImport(s, id, now()); })) setNotice("最近一批任务已撤销。");
   } else if (action === "archive") {
     if (!window.confirm("归档这件事？它不会被标记为完成。")) return;
     await persist(s => { archiveTask(s, id, now()); });
@@ -404,6 +428,7 @@ settingsShortcut.addEventListener("click", async () => {
 });
 root.addEventListener("input", event => {
   if (event.target.id === "capture-input") captureDraft = event.target.value;
+  if (event.target.id === "edit-task-input") editDraft = event.target.value;
   if (event.target.id === "step-input") { stepDraft = event.target.value; stepDirty = true; }
   if (event.target.id === "bulk-input") { bulkDraft = event.target.value; bulkPreview = null; document.querySelector("#import-preview")?.remove(); }
 });
@@ -418,6 +443,15 @@ root.addEventListener("submit", async event => {
       const id = uuid(), timestamp=now();
       if (await persist(s => { createTask(s,{id,title:captureDraft,now:timestamp}); focusTask(s,id,timestamp); })) {
         captureDraft=""; suggestionIndex=0; loadDraft(); screen="focus";
+      }
+    } else if (form.id === "edit-task-form") {
+      editDraft = form.querySelector("#edit-task-input").value;
+      const id = editingTaskId, expectedUpdatedAt = editingUpdatedAt;
+      if (id && await persist(s => {
+        editTask(s,id,{title:editDraft,expectedUpdatedAt,now:now()});
+      })) {
+        editingTaskId=null; editDraft=""; editingUpdatedAt=null;
+        setNotice("任务标题已保存。");
       }
     } else if (form.id === "step-form") {
       stepDraft = form.querySelector("#step-input").value;

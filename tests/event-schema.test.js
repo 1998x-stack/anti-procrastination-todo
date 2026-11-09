@@ -25,7 +25,7 @@ test("even an allowed attribute key cannot carry personal free text", () => {
     ...sample, attributes: { outcome: "private customer complaint" }
   }), /INVALID_EVENT_VALUE/);
   assert.throws(() => validateEvent({
-    ...sample, attributes: { source: "contact alice@example.com" }
+    ...sample, eventName: "step_confirmed", attributes: { source: "contact alice@example.com" }
   }), /INVALID_EVENT_VALUE/);
   assert.throws(() => validateEvent({
     ...sample, attributes: { confirmedActiveBucket: "1 hour at home" }

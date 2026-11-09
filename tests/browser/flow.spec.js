@@ -121,3 +121,29 @@ test("task capture and first-step confirmation work without network after initia
   await expect(page.getByText("只做这一小步就好")).toBeVisible();
   await context.setOffline(false);
 });
+
+
+test("user can edit a task and retain it after refresh", async ({ page }) => {
+  await page.goto("/");
+  await page.getByLabel("今天最难开始的是什么？").fill("原任务");
+  await page.locator("#capture-form button[type=submit]").click();
+  await page.getByRole("button",{name:"← 返回"}).click();
+  await page.getByRole("button",{name:"编辑"}).click();
+  await page.getByLabel("修改任务标题").fill("新任务标题");
+  await page.getByRole("button",{name:"保存修改"}).click();
+  await expect(page.getByText("新任务标题")).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("新任务标题")).toBeVisible();
+});
+
+test("recent untouched bulk import can be safely undone", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button",{name:"从其他清单粘贴"}).click();
+  await page.getByLabel("粘贴纯文本").fill("任务 A\n任务 B");
+  await page.getByRole("button",{name:"预览任务"}).click();
+  await page.getByRole("button",{name:"确认导入"}).click();
+  await expect(page.getByText("你的待开始清单 · 2")).toBeVisible();
+  page.once("dialog", async dialog => { await dialog.accept(); });
+  await page.getByRole("button",{name:"撤销最近一批导入"}).click();
+  await expect(page.getByText("你的待开始清单 · 0")).toBeVisible();
+});
