@@ -47,6 +47,37 @@ flock -n 9 || sf_die "another deploy/rollback command is already running"
 [[ -e "$REL_DIR" ]] && sf_die "release already exists: $REL_DIR"
 mkdir -p "$REL_DIR"
 
+# Any failure between here and a successful activation must not leave an entry
+# under releases/ that could never be activated: rollback.sh derives its default
+# target from the newest release older than current, so a poisoned entry (bad
+# config archive, or no archive at all) would block the rollback chain right when
+# an operator needs it. Evidence: a failed preflight used to leave a release whose
+# archived config can never pass validation, and the default rollback refused at
+# that point (GOTCHA-028).
+#
+# The artifact is QUARANTINED rather than deleted so the evidence survives, and
+# it is moved out of the releases/ search path. This early trap is deliberately
+# replaced by the activation trap below: once activation starts, a release with a
+# preflight-valid config is a legitimate rollback target and must be kept.
+REL_CREATED=0
+ACTIVATED=0
+quarantine_unactivated_release() {
+  [[ "$REL_CREATED" == 1 && "$ACTIVATED" == 0 ]] || return 0
+  [[ -d "$REL_DIR" || -d "$CONFIG_ARCHIVE" ]] || return 0
+  mkdir -p "$SF_DEPLOY_ROOT/rejected-releases"
+  sf_log "quarantining never-activated release $REL_NAME into rejected-releases/"
+  [[ ! -d "$REL_DIR" ]] || mv "$REL_DIR" "$SF_DEPLOY_ROOT/rejected-releases/$REL_NAME" 2>/dev/null || rm -rf -- "$REL_DIR"
+  [[ ! -d "$CONFIG_ARCHIVE" ]] || mv "$CONFIG_ARCHIVE" "$SF_DEPLOY_ROOT/rejected-releases/$REL_NAME.config" 2>/dev/null || true
+}
+fail_handler() {
+  local rc="$1"
+  trap - EXIT
+  if [[ "$rc" -ne 0 ]]; then quarantine_unactivated_release; fi
+  exit "$rc"
+}
+trap 'fail_handler $?' EXIT
+REL_CREATED=1
+
 # --- Copy the static artifact via an explicit allowlist ---------------------
 sf_log "building release ${REL_NAME} from ${BRANCH}@${SHORT} (${DIRTY})"
 tar -cf - -C "$REPO" "${SF_PUBLISH_PATHS[@]}" | tar -xf - -C "$REL_DIR"
@@ -227,6 +258,7 @@ fi
 
 "$REPO/deploy/healthcheck.sh"
 ACTIVATING=0
+ACTIVATED=1
 sf_log "ACTIVE: $REL_NAME at $SF_URL; content-sha256=$PUBLISHED_HASH"
 
 for addr in $SF_BIND; do

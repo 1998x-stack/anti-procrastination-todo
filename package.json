@@ -14,7 +14,9 @@
     "deploy:linux": "bash deploy/deploy.sh",
     "deploy:healthcheck": "bash deploy/healthcheck.sh",
     "benchmark:algorithm": "node scripts/benchmark-algorithm.mjs",
-    "test:deploy:scripts": "bash tests/deployment/scripts-regression.sh"
+    "test:deploy:scripts": "bash tests/deployment/scripts-regression.sh",
+    "test:deploy:staging": "bash tests/deployment/staging-fault-injection.sh",
+    "lab:mixed-version": "node tests/deployment/mixed-version-lab.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.56.1"

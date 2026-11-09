@@ -289,3 +289,114 @@ firewall policies or actual user devices.
 Before field adoption, re-check the active deploy.env, container identity and
 ports, TLS/firewall topology, release+config restoration and real-device paths.
 Only amend GOTCHA-024 once external reachability and HTTPS have evidence.
+
+---
+
+# Round 3 报告：PR #2 在真实 Linux 服务器上的孤立验证（2026-11-09）
+
+> 本节**不覆盖**上面的历史证据，只追加本轮结果。
+
+## R3-1. 被测对象与环境
+
+| 项 | 值 |
+| --- | --- |
+| 被验证 commit | `0767c05e0a642068b1833499c2e0ce261a2477fd`（PR #2 HEAD，DRAFT/OPEN/MERGEABLE，base = `deploy/linux-nginx-hardening-and-fixes`） |
+| 验证分支 | `verify/linux-field-validation-20261109`（独立 git worktree：`/home/ubuntu/codes/sf-verify-20261109`） |
+| 服务器 | Ubuntu 24.04.3 LTS · kernel 7.0.0-38-generic · x86_64 · i5-10500 (12 线程) · 31 GiB RAM · 607 GB 可用 |
+| Docker / nginx | Docker 29.1.3 · nginx/1.27.5（`nginx:1.27-alpine`，digest `sha256:65645c7b…`） |
+| Node / npm | v22.23.3 / 10.9.9 |
+| Chromium | 141.0.7390.37（Playwright build 1194）· `@playwright/test` 1.56.1 |
+| 孤立环境 | 根 `/home/ubuntu/apps/start-first-pr2-staging` · 容器 `start-first-pr2-staging` · `127.0.0.1:18081` |
+| 真实服务 | `start-first-web` · `0.0.0.0:8081` · `/home/ubuntu/apps/start-first` · **全程未修改** |
+
+**是否触碰运行中的业务服务：否。** 未执行 `docker rm -f`（针对他人容器）、未 `prune`、未 `git reset/clean`、未 force push、未改 ufw/iptables/DNS/SSH/绑定、未清除任何真实用户数据。孤立 staging 容器与临时目录仅在本轮结束前用于演练（staging 是本轮自建的可丢弃夹具）。
+
+## R3-2. 测试矩阵（实际命令与结果）
+
+| # | 命令 | 退出码 | 结果 | 耗时 | 日志 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `npm ci` | 0 | 3 packages | 0.37 s | `/tmp/sf2-logs/npm-ci.log` |
+| 2 | `npm run check` | 0 | 9 个模块语法 | 0.30 s | `/tmp/sf2-logs/check.log` |
+| 3 | `npm run verify` | 0 | **53 passed / 0 failed** | 0.66 s | `/tmp/sf2-logs/f-verify.log` |
+| 4 | `npm run benchmark:algorithm` | 0 | 12,000/12,000 · 85.7 ms · ≈140k/s（**非用户效果证据**） | 0.21 s | `/tmp/sf2-logs/f-benchmark` |
+| 5 | `npm run test:deploy:scripts`（离线契约） | 0 | **10/10**（本轮新增 ok 10） | ~0.5 s | `/tmp/sf2-logs/f-scripts.log` |
+| 6 | `npm run test:e2e`（Chromium，4173 harness） | 0 | **34 passed / 0 failed** | 10.4 s | `/tmp/sf2-logs/f-e2e.log` |
+| 7 | `npm run verify:lab-api` | 0 | **31/31** | ~0.4 s | `/tmp/sf2-logs/f-lab.log` |
+| 8 | `npm run test:e2e:deployed`（**staging nginx origin** `127.0.0.1:18081`） | 0 | **9 passed / 0 failed** | 3.7 s | `/tmp/sf2-logs/f-dep.log` |
+| 9 | `npm run test:e2e:deployed`（**真实服务 origin** `127.0.0.1:8081`，只读验证） | 0 | **9 passed / 0 failed** | 3.6 s | `/tmp/sf2-logs/f-live.log` |
+| 10 | `tests/deployment/staging-fault-injection.sh`（**真实 Docker + 真实 nginx**） | 0 | **89 passed / 0 failed** | 数分钟 | `/tmp/sf2-logs/staging-fi6.log` |
+| 11 | `tests/deployment/mixed-version-lab.mjs`（混版本实验） | 0 | **11/11 观察项**（问题已复现，见 R3-4） | ~1 min | 见 R3-4 |
+| 12 | 副本上的升级预演（`start-first-livecopy` @ `18083`） | 0 | 回填一步可回滚，两步被阻塞（GOTCHA-029） | ~1 min | 见 R3-5 |
+
+**基线一致性：** 与上次 CI 记录相比，53 / 34 / 9 / 31 数量不变（全部通过）；部署故障注入契约由 9 → **10**（新增 GOTCHA-028 契约）。
+
+## R3-3. 发布与回滚故障注入结果（真实环境，89/89）
+
+| 场景 | 断言要点 | 结果 |
+| --- | --- | --- |
+| 基线 | staging 仅 `127.0.0.1:18081`，无 `0.0.0.0` 发布；真实服务未变 | PASS |
+| 镜像漂移 | 用同一镜像的本地 tag 别名制造漂移：报 `image drift`，**容器 ID 未变、无 `docker rm -f`**、current/配置未变、站点仍 200 | PASS |
+| 端口漂移 / 挂载漂移 | 报 `port drift` / `mount drift`，同样 fail-closed | PASS |
+| 非法候选 nginx 配置 | 真实一次性 `nginx -t` 容器拦下（`failed validation`），未安装到 live conf | PASS |
+| release 缺必需文件 | `release is incomplete`，拒绝 | PASS |
+| release 含软链接 | 拒绝；并断言 `assets/escape.svg` 未被服务（404，无路径逃逸） | PASS |
+| flock 并发 | 另持锁时 `already running`，拒绝且 current 未变 | PASS |
+| 激活后健康检查失败 | 非零退出；输出 `restoring previous code AND nginx configuration`；current 与三个配置文件 sha256 恢复；**容器未重建**；站点重新 200；无残留备份目录 | PASS |
+| 缺配置归档时回滚 | `no archived nginx config … rollback blocked`，current 未变，站点仍 200 | PASS |
+| 连续默认回滚 | 只向更旧移动；到达最旧后拒绝且**不前进**；活动配置与该 release 归档逐字节一致 | PASS |
+| 同秒并发发布 | 两个 release 目录均生成、无重名、`current` 合法、站点 200 | PASS |
+| dirty 发布摘要 | `workingTree=dirty`；`publishedContentSha256` 可由磁盘 release **独立复算一致**；与干净基线不同 | PASS |
+| 失败后旧版本可用性 | 旧 release 保留且可服务；无 `.*-backup.*` 残留；无多余监听地址 | PASS |
+| 全程真实服务不变量 | 每个场景后断言真实容器 ID / current / `0.0.0.0:8081` / HTTP 200 未变 | PASS |
+
+**关键方法学修正（本轮实际踩到，已修）：** 套件最初把 `SF_REPO_ROOT` 导出给子进程，导致“临时仓库副本”里的注入被忽略、脚本实际发布的是被审查的工作区，从而产生**假通过**。修复为子进程运行时 `env -u SF_REPO_ROOT`（GOTCHA-028 记录中同步说明）。这提醒：故障注入必须验证“注入真的生效”（本轮为此新增“release B 带自身标记”“styles.css 确实来自副本”等断言）。
+
+## R3-4. 混版本实验（GOTCHA-026，已复现，未修复）
+
+```
+== part 1: 跨发布混版本是否可达 ==
+  ok   HTML in the document came from release A
+  ok   deploy really switched current  -> 20261109T081433Z-… -> 20261109T081437Z-…
+  ok   the same document then executed main.js from release B
+       -> document HTML=release A, main.js=release B, core.js=release B, styles.css=release B
+  ok   the mixed state really spans two different release directories
+
+== part 2: 不兼容偏移时用户看到什么 ==
+  observed: {"screen":"inbox","hasCaptureInput":false,"errorNotice":true,
+             "notice":"本地存储不可用。为了避免误以为已经保存，当前无法创建任务。…"}
+  ok   skew did not crash the page with an unhandled error
+  ok   skew is surfaced in the UI (fail closed, not silent)
+  ok   skew did not silently present a working app that cannot save
+  ok   existing tasks were not wiped by the skew  -> before=1 after={"tasks":1,...}
+```
+
+**结论：** 混版本**可达**且已用两处不同 release 目录的标记证明；在跨 release schema 偏移下应用**fail-closed**，用户暂时无法创建任务，但**无数据丢失、无伪造成功**。状态：`REPRODUCED / OPEN`，最小修复方案见 GOTCHA-026（本轮未实施，避免半验证的架构性变更）。
+
+## R3-5. 升级预演与回滚能力（GOTCHA-029）
+
+- 真实根：6 个 release / `config-releases/` = **0**（早于归档机制）。
+- 未升级的副本上：PR #2 的 `rollback.sh` **完全无法回滚**（`no archived nginx config … rollback blocked`）。
+- 在副本上执行 PR #2 的 `deploy.sh` 后：上一版配置被**自动回填** → **一步回滚可用**（`rolled back from …080929Z to …065525Z`，健康检查全过）。
+- 再往前一步：仍被阻塞（缺归档）。
+- 真实服务在此期间未变（容器 ID / current / 绑定 / HTTP 200）。
+
+**建议：** 应用 PR #2 到真实服务前，先为可能需要回退的历史 release 补齐归档，或明确接受“仅保证一步回滚”，并在变更窗口内保留手写恢复步骤；升级后必须在副本/预发演练一次回滚。
+
+## R3-6. 本轮修复的问题
+
+| ID | 优先级 | 症状 | 根因 | 修复 | 回归测试 | 结果 |
+| --- | --- | --- | --- | --- | --- | --- |
+| GOTCHA-028 | P2 | 失败的发布留下“永远无法激活的 release”，使**默认回滚链**在其处中断/拒绝 | `deploy.sh` 在完整性/软链/预检门控**之前**创建 release 与配置归档；失败后留在 `releases/`（回滚搜索路径） | 新增早期 EXIT trap：未成功激活即把二者**隔离**到 `rejected-releases/`（保留证据）；进入激活阶段后该 trap 被替换，配置合法的 release 仍可回滚 | 离线 `ok 10`（含**负控制**：去掉修复后失败，退出码 1）；真实环境 `S4`/`S4b` | **FIXED**（离线 10/10、真实 89/89） |
+
+## R3-7. 未解决 / 未验证（不得视为通过）
+
+| 项 | 状态 | 说明 |
+| --- | --- | --- |
+| 混版本资源版本化（GOTCHA-026） | **REPRODUCED / OPEN** | 已复现并有最小设计；未实施 |
+| 真实服务升级与深度回滚（GOTCHA-029） | **OPEN** | 需操作方变更计划与授权 |
+| 公网 HTTPS / 防火墙边界（GOTCHA-024、Issue #3） | **NOT_VERIFIED** | 无免密 sudo，未查 ufw/iptables/云安全组/路由器转发；未绑定到公网、未配置 TLS |
+| 真实配额耗尽 / IDB `onblocked` | **NOT_VERIFIED** | 本轮未新增验证 |
+| iOS Safari / Firefox / Android / 真机 | **NOT_VERIFIED** | 无设备 |
+| 屏幕阅读器 / WCAG 2.2 AA | **NOT_VERIFIED** | 需辅助技术人工审计 |
+| 长会话 / 休眠唤醒 / 改系统时钟 | **NOT_VERIFIED** | 需人工长时操作 |
+| `.Config.Image` 字符串比较陷阱 | PREVENTIVE / P3 | fail-closed；用本地 tag 别名可稳定复现拒绝行为 |

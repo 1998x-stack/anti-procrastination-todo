@@ -311,3 +311,77 @@ CI 同时使用 mock Docker 隔离注入失败，并在独立 GitHub runner 上�
 建议迁移到 SF_BIND=127.0.0.1 + 经过认证的 SSH 隧道，或启用受控 HTTPS 反向代理；未获得操作方授权时不要擅自修改现有 LAN 服务。任何继续暴露 0.0.0.0 的方案都应核实 UFW/nftables、云安全组、路由器映射和实际网络可达范围，并明确记录证据。
 
 **下一位 Agent 必须重新验证：** 配置/版本归档、实机端口和 HTTPS/TLS、真实设备浏览器测试与回滚恢复；将观察结果追加至 docs/test-report.md 后，才允许将 GOTCHA-024 从 OPEN 改为 FIXED。
+
+---
+
+## 15. Round 3：真实服务器上的孤立验证（2026-11-09）
+
+本轮把 PR #2（安全激活与回滚）拿到**真实 Docker + 真实 nginx** 上做孤立部署验证，并演练故障注入。真实服务（`start-first-web` @ `0.0.0.0:8081`、`/home/ubuntu/apps/start-first`）**全程未被修改**。
+
+### 15.1 孤立环境约定（先隔离，后考虑替换）
+
+| 项 | 真实服务 | 本轮孤立 staging |
+| --- | --- | --- |
+| 部署根 | `/home/ubuntu/apps/start-first` | `/home/ubuntu/apps/start-first-pr2-staging` |
+| 容器 | `start-first-web` | `start-first-pr2-staging` |
+| 绑定 | `0.0.0.0:8081`（仅可信局域网） | `127.0.0.1:18081` |
+| 端口段 | 80/443/8080 属**其他业务**，禁止复用 | 18081（已验证空闲） |
+
+必须通过环境变量显式指向隔离环境，**不要**依赖默认值：
+```bash
+export SF_REPO_ROOT=<独立 worktree>
+export SF_DEPLOY_ROOT=/home/ubuntu/apps/start-first-pr2-staging
+export SF_CONTAINER=start-first-pr2-staging
+export SF_BIND=127.0.0.1 SF_PORT=18081 SF_URL=http://127.0.0.1:18081
+export SF_IMAGE=nginx:1.27-alpine
+```
+
+### 15.2 发布/回滚/归档语义（PR #2 之后的实际行为）
+
+- 每次发布先**归档该版本的 nginx 配置**到 `config-releases/<release>/`，并在**无网络的一次性 nginx 容器**里做语法预检；预检通过前不碰运行中的配置。
+- 激活前保存原 `current` 与三个配置文件；激活或健康检查失败时，EXIT trap **同时**恢复代码与配置。
+- `rollback.sh` 要求目标 release **有完整归档配置**，并按 `current`、`headers.inc`、`headers-html.conf` 一并恢复；默认回滚只选**严格更旧**的 release，到最旧后会拒绝（绝不前进）。
+- **失败的发布不会留下阻塞回滚的条目**：任何“已建 release、未成功激活”的失败都会把 `releases/<rel>` 与 `config-releases/<rel>` 移入 `rejected-releases/`（保留证据、移出回滚搜索路径，GOTCHA-028）。
+- 拓扑（镜像 / 端口绑定 / 文档根挂载）漂移一律 **fail-closed**，**不会**自动 `docker rm -f` 重建容器。
+
+### 15.3 真实环境故障注入套件
+
+```bash
+SF_REPO_ROOT=<worktree> SF_DEPLOY_ROOT=<staging根> SF_CONTAINER=<staging容器> \
+SF_BIND=127.0.0.1 SF_PORT=18081 SF_URL=http://127.0.0.1:18081 \
+SF_IMAGE=nginx:1.27-alpine LIVE_URL=http://127.0.0.1:8081 \
+LIVE_CONTAINER=start-first-web LIVE_ROOT=/home/ubuntu/apps/start-first \
+bash tests/deployment/staging-fault-injection.sh
+```
+
+覆盖：镜像/端口/挂载漂移 fail-closed（真实 `docker inspect`）、非法候选配置被真实预检拦下、release 缺文件、release 含软链接（含路径逃逸检查）、flock 并发拒绝、激活后健康检查失败的真实恢复（代码+配置+容器不重建）、缺归档时回滚被拒、连续默认回滚不前进、同秒并发发布、dirty 发布摘要可复算、旧 release 保留、无多余监听地址。
+**安全护栏（脚本内强制）：** 拒绝在真实部署根/真实容器上运行；运行前要求真实站点健康；**每个场景后**断言真实容器 ID / current / 端口绑定 / HTTP 状态未变；从不自行执行 `docker rm`/`prune`；内容注入只作用于仓库的**临时副本**。
+
+离线契约（CI 可跑）：`npm run test:deploy:scripts`（10/10，无需 Docker）。
+
+### 15.4 混版本实验（GOTCHA-026）
+
+```bash
+SF_URL=http://127.0.0.1:18081 SF_DEPLOY_ROOT=<staging根> MIX_SHIM=<带标记的仓库副本> \
+  node tests/deployment/mixed-version-lab.mjs
+```
+在“挂住 main.js 请求”的同时执行**真实发布**，可稳定复现“文档来自 release A、模块来自 release B”。**该问题已复现但未修复**（最小方案见 GOTCHA-026），因此当前**不得**宣称已解决混版本。
+
+### 15.5 升级真实服务前的预演配方（本轮已执行，预演对象是副本）
+
+```bash
+SRC=/home/ubuntu/apps/start-first; DST=/tmp/livecopy            # 只读复制，绝不就地修改
+cp -a "$SRC" "$DST"; rm -f "$DST/deploy.env"                    # 去掉副本里的实拓扑，避免误导
+SF_DEPLOY_ROOT="$DST" SF_CONTAINER=<新容器名> SF_BIND=127.0.0.1 SF_PORT=<空闲端口> \
+  SF_URL=http://127.0.0.1:<空闲端口> bash deploy/deploy.sh      # 预演升级
+bash deploy/deploy.sh --no-restart                              # 或先只预演 stage-only
+# 预演完成后删除副本与临时容器；真实服务的 current/绑定/容器 ID 必须保持不变
+```
+
+**预演结论（GOTCHA-029，重要）：** 真实根目录有 6 个 release 但 `config-releases/` 为空（早于归档机制）。首次用 PR #2 的 `deploy.sh` 发布**只会回填上一版**的配置，因此升级后**只保证一步回滚**；更深回滚需要先补齐归档或接受该限制。详见 GOTCHA-029。
+
+### 15.6 本轮未做（需授权）
+
+- 未修改真实服务的绑定（仍 `0.0.0.0:8081`）、未启用 HTTPS、未改 ufw/iptables/DNS。
+- 未把 PR #2 应用到真实服务（仅在副本上预演）。
+- 未清理真实根目录的历史 release 或为它们补齐归档。
