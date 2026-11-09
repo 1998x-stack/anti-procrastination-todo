@@ -4,3 +4,9 @@ coverage/
 playwright-report/
 test-results/
 *.log
+
+# Deployment artifact output (rendered UI checkpoints from the browser suite)
+artifacts/
+
+# Local deployment root used by CI smoke jobs
+.deploy/
