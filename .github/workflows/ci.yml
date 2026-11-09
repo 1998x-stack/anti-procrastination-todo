@@ -15,6 +15,7 @@ jobs:
           node-version: '22'
       - run: npm run verify
       - run: npm run benchmark:algorithm
+      - run: bash tests/deployment/scripts-regression.sh
   browser-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -66,6 +67,8 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
       - run: bash deploy/deploy.sh
+      # Prove a real nginx rollback restores a previously served release.
+      - run: bash deploy/deploy.sh && bash deploy/rollback.sh && bash deploy/healthcheck.sh
       # After a real deploy: served bytes, enforced CSP, secure-context IndexedDB
       # and the full user flow against the deployed origin.
       - run: npm run test:e2e:deployed

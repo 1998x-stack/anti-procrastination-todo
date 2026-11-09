@@ -14,11 +14,22 @@ SF_DEPLOY_ROOT="${SF_DEPLOY_ROOT:-/home/ubuntu/apps/start-first}"
 # Server-local topology overrides (recorded so a plain re-run reproduces exactly
 # the same bindings instead of silently reverting to loopback-only).
 # Precedence: explicit environment > deploy.env > built-in defaults.
-if [[ -f "${SF_DEPLOY_ROOT}/deploy.env" ]]; then
-  while IFS='=' read -r sf_key sf_value; do
-    [[ -z "${sf_key// }" || "$sf_key" == \#* ]] && continue
+if [[ -f "$SF_DEPLOY_ROOT/deploy.env" ]]; then
+  # This is NOT a shell script. Allow only the three documented topology keys;
+  # an unrestricted printf -v key could override PATH/BASH_ENV or other internals.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+    if [[ ! "$line" =~ ^(SF_BIND|SF_PORT|SF_URL)=(.*)$ ]]; then
+      sf_die "unknown/invalid key in deploy.env (allowed: SF_BIND, SF_PORT, SF_URL)"
+    fi
+    sf_key="${BASH_REMATCH[1]}"
+    sf_value="${BASH_REMATCH[2]}"
+    # Trim a matching pair of quotes without eval/source.
+    if [[ "$sf_value" == \"*\" || "$sf_value" == \'*\' ]]; then
+      sf_value="${sf_value:1:${#sf_value}-2}"
+    fi
     if [[ -z "${!sf_key:-}" ]]; then printf -v "$sf_key" '%s' "$sf_value"; fi
-  done < "${SF_DEPLOY_ROOT}/deploy.env"
+  done < "$SF_DEPLOY_ROOT/deploy.env"
 fi
 
 # Publish addresses. SPACE-SEPARATED LIST is allowed, e.g.

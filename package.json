@@ -13,7 +13,8 @@
     "verify:lab-api": "node scripts/verify-lab-api.mjs",
     "deploy:linux": "bash deploy/deploy.sh",
     "deploy:healthcheck": "bash deploy/healthcheck.sh",
-    "benchmark:algorithm": "node scripts/benchmark-algorithm.mjs"
+    "benchmark:algorithm": "node scripts/benchmark-algorithm.mjs",
+    "test:deploy:scripts": "bash tests/deployment/scripts-regression.sh"
   },
   "devDependencies": {
     "@playwright/test": "1.56.1"
