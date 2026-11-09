@@ -165,6 +165,13 @@ docker exec start-first-web nginx -t  # 只校验配置
 | GOTCHA-018 | Deployment | P1（公网阻断项） | HTTPS、域名、证书、HSTS 未配置 | NOT_VERIFIED | [→](#gotcha-018https-与域名部署未验证公网阻断项) |
 | GOTCHA-019 | Testing | P3 | 长会话、休眠唤醒、改系统时钟未验证 | NOT_VERIFIED | [→](#gotcha-019长会话休眠唤醒与系统时钟修改未验证) |
 | GOTCHA-020 | Deployment | P1（若钉住 DHCP 地址） | Docker 绑具体 IP、容器起不来、cannot assign requested address、租约变化 | FIXED | [→](#gotcha-020把-docker-发布钉在-dhcp-地址上会让容器在租约变化后起不来) |
+| GOTCHA-021 | Deployment | P1 | 默认 rollback 可能跳到更新版本 | FIXED | [详情](#gotcha-021) |
+| GOTCHA-022 | Deployment | P1 | 发布健康检查失败仍暴露半更新站点 | FIXED | [详情](#gotcha-022) |
+| GOTCHA-023 | Deployment | P1 | 拓扑漂移触发 docker rm -f | FIXED | [详情](#gotcha-023) |
+| GOTCHA-024 | Security | P1 | 0.0.0.0 + 无 TLS + 防火墙未验证 | OPEN | [详情](#gotcha-024) |
+| GOTCHA-025 | Security | P2 | deploy.env 任意变量名污染运行环境 | FIXED | [详情](#gotcha-025) |
+| GOTCHA-026 | Deployment | P2 | 未版本化 JS/CSS 跨发布切换可能混版本 | OPEN | [详情](#gotcha-026) |
+| GOTCHA-027 | Deployment | P2 | --no-restart 仍改变 current | FIXED | [详情](#gotcha-027) |
 
 ---
 
@@ -849,6 +856,84 @@ SF_URL=http://192.168.169.223:8081 npm run test:e2e:deployed   → 9/9
 **关联文件与提交：** `deploy/env.sh`、`deploy/deploy.sh`、`deploy/healthcheck.sh`、`tests/deployed/deployed.spec.js`、`/home/ubuntu/apps/start-first/deploy.env`。
 
 **Agent 快速定位提示：** 若容器突然起不来且日志是 `cannot assign requested address`，先查 `SF_BIND` 是否钉了某个具体 IP、该 IP 是否仍在本机。临时解决：改成 `0.0.0.0` 或换成当前真实地址后重跑 `deploy/deploy.sh`。**不要**去改 nginx 配置或反复 `docker restart`。
+
+---
+
+## Follow-up review（PR #2，安全发布与回滚）
+
+**证据边界：** 本节的 FIXED 代表 GitHub Actions 及隔离模拟测试已通过，不代表操作方的 Ubuntu 主机已经重新部署。本节不覆盖 GOTCHA-001～020 原有现场证据。详见 tests/deployment/scripts-regression.sh 和 PR #2。
+
+### GOTCHA-021
+
+**默认 rollback 会向前切换（FIXED / P1 / Deployment）**
+
+症状与根因：旧 rollback.sh 从所有 release 中选择“最新且与当前不同”的目录。若按 r3→r2 回滚，再执行一次默认 rollback 反而切到 r3。安全语义应当是仅选择比当前更旧的 release。
+
+修复：严格选择较早版本，前进到新版本必须明确指定 release 名。回滚时同时检查目标 release 的 nginx 配置归档。
+
+验证：隔离模拟连续回滚 r3→r2→r1；再回滚明确失败。CI 在真实 nginx 容器内完成二次部署与回滚，并验证站点健康。Agent 优先使用 deploy/rollback.sh --list 核实历史，不要只比较版本是否不同。
+
+### GOTCHA-022
+
+**部分激活后健康检查失败（FIXED / P1 / Deployment）**
+
+根因：旧 deploy.sh 先覆盖 nginx 配置并切换 current，再 nginx -t / healthcheck；失败时退出，站点留在不一致状态。旧 rollback.sh 不还原 nginx 配置。
+
+修复：将每次 nginx 配置归档到 config-releases/<release>/；先用无网络的一次性 nginx 容器做语法预检；激活阶段保存原 current/配置，失败时退出钩子尝试恢复两者；rollback 也恢复目标配置。
+
+验证：隔离注入“配置预检失败”和“发布后健康检查失败”，确认原链接及三个配置文件保持不变；真实 Docker CI 检验了正常部署与回滚。
+
+限制：EXIT 退出钩子无法保证断电、SIGKILL 或硬盘损坏后的自动恢复。实际 Linux 服务器仍需重演故障演练；恢复后必须运行 deploy/healthcheck.sh。
+
+### GOTCHA-023
+
+**漂移导致自动删除容器（FIXED / P1 / Deployment）**
+
+根因：前次部署脚本检测到镜像或端口漂移，会直接执行 docker rm -f 并重建。共享服务器上仅凭容器名不足以证明可以安全删除，而且重建失败可能让站点持续下线。
+
+修复：fail closed。先检查容器运行状态、镜像、发布地址精确集合及文件系统根挂载；任何漂移均拒绝激活，不执行自动删容器。拓扑变更需要单独授权和回退计划。
+
+验证：模拟现有容器绑定不符，断言旧 current/配置不变且从未调用 docker rm。Agent 应检查 docker port、docker inspect 后单独规划变更。
+
+### GOTCHA-024
+
+**局域网明文 HTTP 与所有网卡监听风险（OPEN / P1 / Security）**
+
+证据：实地分支的 deploy.env 使用 SF_BIND=0.0.0.0、SF_PORT=8081，未配置 HTTPS，UFW 规则因缺乏 sudo 权限没有被验证。0.0.0.0 代表所有 IPv4 网卡；“只在局域网”不能仅凭 Docker 绑定值推断，新增网卡/路由规则也可能扩大暴露。
+
+威胁：即使正常前端不上传任务正文，HTTP 中间人仍可能替换同源 JS，进而读取 IndexedDB 并外传用户任务。CSP 和“零业务出站请求”无法阻止被篡改的同源资源执行。
+
+建议：优先回环绑定 + HTTPS 反向代理，或 SSH 端口转发；在可信局域网也推荐 HTTPS。若必须保留 0.0.0.0，先实际核实 nftables/iptables/UFW、云安全组、路由器端口转发和远端设备的可达边界。无证据不得标记公网安全。
+
+本 PR 未更改用户服务器当前绑定，未远程执行任何修改。
+
+### GOTCHA-025
+
+**deploy.env 任意变量名注入（FIXED / P2 / Security）**
+
+原解析器虽然没有 source 配置文件，却对任意 KEY=value 做 printf -v 赋值；恶意/误配置 PATH 等变量可能改变脚本后续命令执行环境。
+
+修复：只允许 SF_BIND、SF_PORT、SF_URL 三个已文档化键；拒绝其他名称，且在读取前先定义错误处理函数，不执行 eval/source。
+
+验证：测试将 PATH=/tmp/attacker-path 写入隔离 deploy.env，确认脚本拒绝执行且当前发布不变。
+
+### GOTCHA-026
+
+**静态资源混版本风险（OPEN / P2 / Deployment）**
+
+现有 index.html 和 JS/CSS 路径未包含 release ID。Cache-Control: no-cache 只是重新验证；若浏览器取得 HTML 后恰好发生版本切换，后续模块请求仍可能命中新版本代码，而非同一 release 快照。
+
+建议：如进入持续对外服务阶段，给每次发布生成不可变版本资源路径，并补充受控延迟/并发发布测试。尚未实现，不能把单文件 SHA 检查当作解决此问题。
+
+### GOTCHA-027
+
+**--no-restart 仍切换 live 版本（FIXED / P2 / Deployment）**
+
+旧命令跳过重启前已经切换 current，站点实际上发生了版本变化。现在兼容参数代表真正的 stage-only：生成静态 release、归档配置及执行 preflight，但不切换 current 或 reload。
+
+另一个问题是旧 worktreeDigest 只哈希 git status 文件名/状态，不反映改动内容。现在 release 元数据有 publishedContentSha256，计算实际发布文件的有序内容摘要。dirty release 仍不可仅靠 commit SHA 复现，应优先采用干净提交发布。
+
+验证：隔离测试阶段发布不触及 current/配置；所有内容哈希仍需按实际服务器发布元数据核查。
 
 ---
 

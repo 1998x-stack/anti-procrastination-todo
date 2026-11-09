@@ -2,7 +2,9 @@
 
 **适用 commit：** `71071bfed912`（部署时工作区为 dirty，见 release 元数据）
 **环境：** Ubuntu 24.04.3 LTS / x86_64 / Intel i5-10500（12 线程）/ 31 GiB RAM / 609 GB 可用磁盘
-**状态：** 已在本机完成部署、验证、回滚演练、局域网访问验证。**未做公网/HTTPS 部署**（无授权与域名 → `NOT_VERIFIED`，见 `docs/gotchas.md` GOTCHA-018）。
+**状态：** 已在本机完成部署、验证、回滚演练、局域网访问验证。
+
+**后续代码审查提示：** [PR #2](https://github.com/1998x-stack/anti-procrastination-todo/pull/2) 对部署/回滚安全性新增修复和 CI；这些是 GitHub Actions 证据，尚未在原 Ubuntu 主机重新部署。文档中最初的步骤与现场结果为历史基线，最新安全流程见第 15 节。**未做公网/HTTPS 部署**（无授权与域名 → `NOT_VERIFIED`，见 `docs/gotchas.md` GOTCHA-018）。
 
 ---
 
@@ -42,6 +44,7 @@
 ├── releases/<UTC时间>-<sha12>/   # 不可变发布目录（白名单拷贝的静态文件）
 ├── current -> releases/<…>       # 相对软链，原子切换（mv -T）
 ├── conf/                         # 生效的 nginx 配置副本（由 deploy.sh install）
+├── config-releases/<release>/    # nginx 配置归档（PR #2）
 ├── meta/<release>.json           # 发布元数据：commit、分支、是否 dirty、时间、URL
 └── logs/                         # 预留（当前 nginx 日志走 docker logs，见 GOTCHA-010）
 ```
@@ -82,7 +85,7 @@ docker pull nginx:1.27-alpine   # digest: nginx@sha256:65645c7bb6a0661892a8b03b8
 ```bash
 cd /home/ubuntu/codes/anti-procrastination-todo
 deploy/deploy.sh            # 完整发布（含容器创建/校验/reload/健康检查）
-deploy/deploy.sh --no-restart   # 只构建 release 并切换 current，不动容器
+deploy/deploy.sh --no-restart   # PR #2 stage-only：准备但不改变 current 或 nginx
 ```
 
 `deploy.sh` 的步骤（幂等，可重复执行）：
@@ -200,7 +203,7 @@ SF_URL=http://127.0.0.1:8081     # 本地健康检查与测试仍走 loopback
 
 ### 10.2 绑定漂移会被检测并重建容器
 
-`deploy.sh` 会比较**期望的端口绑定、镜像、文档根挂载**与现有容器；一旦不一致就 `docker rm -f` 后按新拓扑重建，并等待容器内 nginx 就绪。避免"改端口却没生效"这类"成功但什么都没做"的问题。
+**PR #2 已改变该逻辑：** 部署会比较绑定地址精确集合、镜像、根挂载，发现漂移即拒绝自动激活；不会因容器同名而执行 docker rm -f。拓扑变更需操作方单独授权、记录原状态并准备回滚。
 
 ### 10.3 局域网访问的已知含义（必须告知使用者）
 
@@ -263,3 +266,48 @@ SF_URL=http://127.0.0.1:8081     # 本地健康检查与测试仍走 loopback
 - IndexedDB 版本升级 `onblocked` 路径（GOTCHA-015）。
 - 断电/重启后的数据完整性（容器 `restart=unless-stopped` 只保证服务自启）。
 - 非 Chromium 浏览器与真实移动设备（GOTCHA-016）。
+
+
+---
+
+## 15. PR #2 发布一致性与独立测试（取代原有不安全步骤）
+
+**本节是代码审查后的新方案，还没有在原服务器验证。** 原服务器仍按当时已授权配置运行，PR #2 不会主动 SSH 进服务器或变更其容器。
+
+### 15.1 更新的发布顺序
+
+1. 在部署根获取排他的 flock 文件锁，防止两个部署/回滚进程交错。
+2. 白名单复制静态文件，拒绝能越过发布根目录的符号链接，并按实际发布文件有序计算 publishedContentSha256。
+3. 归档与新 release 绑定的 nginx 配置到 config-releases/<release>/，由无网络的一次性 nginx 容器执行 nginx -t。
+4. 只进行预备工作时使用 deploy/deploy.sh --no-restart；它现在真正做到不修改 live current/conf。
+5. 正式激活前检查运行中容器的镜像、精确端口绑定、发布根挂载；不匹配即退出，不自动删除/重建。
+6. 保存旧 nginx 配置和旧 current，原子切换到新版本，reload 并完成真实静态内容健康检查。
+7. 一旦 reload 或健康检查失败，通过 EXIT 钩子尽力恢复旧代码软链、旧配置，并报告非零退出码。
+8. 回滚默认只选严格早于当前的版本；目标 nginx 配置归档缺失则拒绝执行。需要向前部署必须明确指定 release 名称。
+
+**回滚重要限制：** 这些脚本对普通失败有恢复逻辑，但不能对断电、SIGKILL、磁盘损坏承诺自动恢复。跨版本的 JS/CSS 没有不可变 URL，发布瞬间仍可能混用资源（GOTCHA-026）。
+
+### 15.2 复测命令与 CI 证据
+
+开发者可以先执行：
+
+~~~bash
+npm run verify
+npm run test:deploy:scripts
+npm run test:e2e
+# 真实环境明确允许后才执行：
+deploy/deploy.sh
+deploy/healthcheck.sh
+npm run test:e2e:deployed
+deploy/rollback.sh --list
+~~~
+
+CI 同时使用 mock Docker 隔离注入失败，并在独立 GitHub runner 上实际启动 nginx 容器、发布两个版本、执行 rollback 和浏览器测试。**CI 不能替代原 Linux 服务器现场重测。**
+
+### 15.3 局域网访问的安全边界（P1 OPEN）
+
+当前历史部署记录的 SF_BIND=0.0.0.0 并非“只允许 LAN”：它是所有 IPv4 接口绑定，且现场防火墙规则未验证。局域网明文 HTTP 下的中间人可能篡改同源 JS 并读取浏览器 IndexedDB，因此“程序不主动上传任务”不等于“任务不可能经网络泄漏”。
+
+建议迁移到 SF_BIND=127.0.0.1 + 经过认证的 SSH 隧道，或启用受控 HTTPS 反向代理；未获得操作方授权时不要擅自修改现有 LAN 服务。任何继续暴露 0.0.0.0 的方案都应核实 UFW/nftables、云安全组、路由器映射和实际网络可达范围，并明确记录证据。
+
+**下一位 Agent 必须重新验证：** 配置/版本归档、实机端口和 HTTPS/TLS、真实设备浏览器测试与回滚恢复；将观察结果追加至 docs/test-report.md 后，才允许将 GOTCHA-024 从 OPEN 改为 FIXED。

@@ -26,9 +26,14 @@ case "$1" in
       esac
     fi
     exit 0 ;;
-  port) echo '127.0.0.1:8081' ;;
+  port)
+    if [[ "$MOCK_PORT_DRIFT" == 1 ]]; then echo '0.0.0.0:8081'
+    else echo '127.0.0.1:8081'; fi ;;
+
   run) [[ "$MOCK_PREFLIGHT_FAIL" != 1 ]] ;;
-  exec|rm) exit 0 ;;
+  exec) exit 0 ;;
+  rm) [[ -z "$MOCK_RM_MARKER" ]] || touch "$MOCK_RM_MARKER"; exit 0 ;;
+
   *) echo "unexpected fake docker call: $*" >&2; exit 50 ;;
 esac
 DOCKER
@@ -77,7 +82,9 @@ reset_fixture() {
   for f in server.conf headers.inc headers-html.conf; do
     cp "$SF_DEPLOY_ROOT/config-releases/$R3/$f" "$SF_DEPLOY_ROOT/conf/$f"
   done
-  export MOCK_PREFLIGHT_FAIL=0 MOCK_HEALTH_FAIL=0
+  export MOCK_PREFLIGHT_FAIL=0 MOCK_HEALTH_FAIL=0 MOCK_PORT_DRIFT=0
+  export MOCK_RM_MARKER="$TMP/mock-container-remove"
+  rm -f "$MOCK_RM_MARKER"
 }
 run_script() { bash "$REAL_ROOT/deploy/$1" "${@:2}"; }
 expect_current() {
@@ -139,4 +146,21 @@ expect_current "$R3"
 expect_config "$R3"
 echo "ok 7: failed activation restores prior code and config"
 
-echo "7/7 isolated deployment/rollback fault-injection contracts passed"
+reset_fixture
+export MOCK_PORT_DRIFT=1
+if run_script deploy.sh >/dev/null 2>&1; then echo "unexpected port drift must stop deploy" >&2; exit 1; fi
+expect_current "$R3"
+expect_config "$R3"
+[[ ! -f "$MOCK_RM_MARKER" ]] || { echo "deploy must never delete container automatically" >&2; exit 1; }
+echo "ok 8: topology drift is fail-closed (no docker rm -f)"
+
+reset_fixture
+echo "PATH=/tmp/attacker-path" > "$SF_DEPLOY_ROOT/deploy.env"
+if run_script rollback.sh --list >/dev/null 2>&1; then
+  echo "deploy.env must reject unknown variable assignment" >&2; exit 1
+fi
+rm -f "$SF_DEPLOY_ROOT/deploy.env"
+expect_current "$R3"
+echo "ok 9: deploy.env parser rejects arbitrary variable injection"
+
+echo "9/9 isolated deployment/rollback fault-injection contracts passed"

@@ -256,3 +256,36 @@ deploy/deploy.sh                   # 发布 + 27 项健康检查
 npm run test:e2e:deployed          # 9 passed
 deploy/rollback.sh --list          # 回滚点列表
 ```
+
+
+---
+
+## 15. Follow-up code review (PR #2, not a Linux server retest)
+
+Sections 1–14 above remain the original Codex Ubuntu 24.04 field results.
+This section documents GitHub code review, isolated failure injection and
+GitHub Actions; no SSH connection or new deployment to the operator's live
+0.0.0.0:8081 server has been performed.
+
+PR: https://github.com/1998x-stack/anti-procrastination-todo/pull/2
+
+### Findings and scope
+
+- P1 FIXED (CI): default rollback could jump forward after a prior rollback.
+- P1 FIXED (CI): invalid nginx config/reload/health check could leave partial activation; now candidate config is preflighted and old code/config restored on failure.
+- P1 FIXED (CI): container drift no longer triggers automatic docker rm -f on shared server.
+- P1 OPEN: no proof of LAN-only restriction for 0.0.0.0 or HTTPS; HTTP-injected same-origin JS could read IndexedDB.
+- P2 FIXED (CI): deploy.env key allowlist, truthful stage-only semantics, content-based published SHA, exclusive deployment locking.
+- P2 OPEN: unversioned JS/CSS requests could straddle a release switch and mix artifacts.
+
+### Verification method
+
+CI unit job runs a disposable fake-Docker release/rollback fault injection
+harness in tests/deployment/scripts-regression.sh. A separate CI job runs real
+nginx in Docker, performs two releases, rolls back, checks served bytes and
+executes deployed Playwright scenarios. These checks do not validate live
+firewall policies or actual user devices.
+
+Before field adoption, re-check the active deploy.env, container identity and
+ports, TLS/firewall topology, release+config restoration and real-device paths.
+Only amend GOTCHA-024 once external reachability and HTTPS have evidence.

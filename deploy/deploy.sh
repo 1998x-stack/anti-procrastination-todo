@@ -2,14 +2,19 @@
 # Publish the current git checkout as a new immutable release and switch to it atomically.
 #
 # Usage: deploy/deploy.sh [--no-restart]
-#   --no-restart  build the release + move `current` but do not create/reload the container
+#   --no-restart  stage and preflight ONLY; never modify live current/config
 #
 # Safe to re-run: every run creates a new timestamped release directory.
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env.sh"
 
 RESTART=1
-[[ "${1:-}" == "--no-restart" ]] && RESTART=0
+[[ $# -le 1 ]] || sf_die "usage: deploy/deploy.sh [--no-restart]"
+case "${1:-}" in
+  "") ;;
+  --no-restart) RESTART=0 ;;
+  *) sf_die "unknown argument: $1" ;;
+esac
 
 command -v docker >/dev/null || sf_die "docker is required"
 docker info >/dev/null 2>&1 || sf_die "docker daemon is not reachable by $(id -un)"
@@ -223,3 +228,10 @@ fi
 "$REPO/deploy/healthcheck.sh"
 ACTIVATING=0
 sf_log "ACTIVE: $REL_NAME at $SF_URL; content-sha256=$PUBLISHED_HASH"
+
+for addr in $SF_BIND; do
+  case "$addr" in
+    127.0.0.1|::1) : ;;
+    *) sf_log "SECURITY WARNING: $addr:$SF_PORT serves plain HTTP. Verify firewall and TLS before real-user access." ;;
+  esac
+done
