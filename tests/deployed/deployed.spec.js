@@ -7,6 +7,43 @@
 import { test, expect } from "@playwright/test";
 
 const ORIGIN = new URL(process.env.SF_URL || "http://127.0.0.1:8081").origin;
+const ORIGIN_URL = new URL(ORIGIN);
+// A plain-HTTP origin on a LAN hostname is NOT a secure context (localhost and
+// https are). The suite must state which environment it actually verified
+// instead of asserting the loopback assumption everywhere.
+const IS_SECURE_ORIGIN = ORIGIN_URL.protocol === "https:" ||
+  ["127.0.0.1", "localhost", "[::1]", "::1"].includes(ORIGIN_URL.hostname);
+
+test("deployed origin storage works, with the secure-context requirement stated explicitly", async ({ page }) => {
+  await page.goto("/");
+  const probe = await page.evaluate(async () => {
+    const databases = await indexedDB.databases();
+    return {
+      isSecureContext: window.isSecureContext,
+      hasRandomUUID: typeof crypto?.randomUUID === "function",
+      hasGetRandomValues: typeof crypto?.getRandomValues === "function",
+      hasIndexedDB: typeof indexedDB === "object",
+      databaseNames: databases.map(d => d.name)
+    };
+  });
+  expect(probe.isSecureContext, `origin ${ORIGIN} secure-context state`).toBe(IS_SECURE_ORIGIN);
+  expect(probe.hasIndexedDB).toBe(true);
+  expect(probe.databaseNames).toContain("start-first-local-v1");
+  if (IS_SECURE_ORIGIN) {
+    // Loopback/https: the platform API is available and used directly.
+    expect(probe.hasRandomUUID).toBe(true);
+  } else {
+    // LAN over plain HTTP: crypto.randomUUID is unavailable by spec, so the app
+    // must rely on the documented crypto.getRandomValues fallback and must not
+    // fail silently. Task creation is asserted below to prove it is usable.
+    expect(probe.hasRandomUUID).toBe(false);
+    expect(probe.hasGetRandomValues).toBe(true);
+    await page.getByLabel("今天最难开始的是什么？").fill("LAN origin 可用性检查");
+    await page.locator("#capture-form button[type=submit]").click();
+    await expect(page.getByText("现在先看这一件事")).toBeVisible();
+    await expect(page.locator(".notice.error")).toHaveCount(0);
+  }
+});
 
 test("deployed entry point loads with strict headers and zero external requests", async ({ page }) => {
   const requests = [];
@@ -36,24 +73,6 @@ test("deployed entry point loads with strict headers and zero external requests"
   expect(external).toEqual([]);
   expect(failed).toEqual([]);
   expect(consoleErrors).toEqual([]);
-});
-
-test("deployed origin is a secure context: IndexedDB and crypto.randomUUID work", async ({ page }) => {
-  await page.goto("/");
-  const probe = await page.evaluate(async () => {
-    const databases = await indexedDB.databases();
-    return {
-      isSecureContext: window.isSecureContext,
-      uuidWorks: typeof crypto.randomUUID === "function" && /^[0-9a-f-]{36}$/.test(crypto.randomUUID()),
-      hasIndexedDB: typeof indexedDB === "object",
-      databaseNames: databases.map(d => d.name)
-    };
-  });
-  expect(probe.isSecureContext).toBe(true);
-  expect(probe.hasIndexedDB).toBe(true);
-  expect(probe.uuidWorks).toBe(true);
-  // The app must have created its single versioned store on first load.
-  expect(probe.databaseNames).toContain("start-first-local-v1");
 });
 
 test("CSP is actually enforced: injected inline script cannot execute", async ({ page }) => {

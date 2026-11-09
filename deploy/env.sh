@@ -11,9 +11,21 @@ SF_REPO_ROOT="${SF_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # Deployment root: releases/, current symlink, nginx conf, logs and meta live here.
 SF_DEPLOY_ROOT="${SF_DEPLOY_ROOT:-/home/ubuntu/apps/start-first}"
 
-# Loopback-only publication by default. NEVER change SF_BIND to 0.0.0.0 without
-# explicit authorization: a public HTTP origin changes the IndexedDB origin and
-# is not a secure context for crypto.randomUUID.
+# Server-local topology overrides (recorded so a plain re-run reproduces exactly
+# the same bindings instead of silently reverting to loopback-only).
+# Precedence: explicit environment > deploy.env > built-in defaults.
+if [[ -f "${SF_DEPLOY_ROOT}/deploy.env" ]]; then
+  while IFS='=' read -r sf_key sf_value; do
+    [[ -z "${sf_key// }" || "$sf_key" == \#* ]] && continue
+    if [[ -z "${!sf_key:-}" ]]; then printf -v "$sf_key" '%s' "$sf_value"; fi
+  done < "${SF_DEPLOY_ROOT}/deploy.env"
+fi
+
+# Publish addresses. SPACE-SEPARATED LIST is allowed, e.g.
+#   SF_BIND="127.0.0.1 192.168.169.223"   # loopback + one specific LAN address
+# Deliberately NOT 0.0.0.0 by default: that would also expose the site on every
+# Docker bridge (172.x) interface. Never widen this without explicit
+# authorization, and never publish TLS-less HTTP beyond a trusted network.
 SF_BIND="${SF_BIND:-127.0.0.1}"
 SF_PORT="${SF_PORT:-8081}"
 
@@ -21,8 +33,16 @@ SF_PORT="${SF_PORT:-8081}"
 SF_CONTAINER="${SF_CONTAINER:-start-first-web}"
 SF_IMAGE="${SF_IMAGE:-nginx:1.27-alpine}"
 
-# Public URL used by healthcheck/verification.
-SF_URL="${SF_URL:-http://${SF_BIND}:${SF_PORT}}"
+# Public URL used by healthcheck/verification. Defaults to the first bind
+# address, which is loopback unless overridden.
+SF_PRIMARY_BIND="${SF_BIND%% *}"
+SF_URL="${SF_URL:-http://${SF_PRIMARY_BIND}:${SF_PORT}}"
+
+# Human-readable list of the published URLs (loopback first).
+sf_urls() {
+  local addr
+  for addr in $SF_BIND; do printf 'http://%s:%s ' "$addr" "$SF_PORT"; done
+}
 
 # Files copied into a release. THIS IS AN ALLOWLIST ON PURPOSE:
 # code/backend (research API reference), tests, scripts, docs, .github, deploy,

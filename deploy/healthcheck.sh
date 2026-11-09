@@ -26,8 +26,21 @@ if docker inspect -f '{{.State.Running}}' "$SF_CONTAINER" 2>/dev/null | grep -q 
 else
   echo "  FAIL container not running                          $SF_CONTAINER"; FAILURES=$((FAILURES+1))
 fi
-check "loopback bind only" "127.0.0.1:${SF_PORT}" \
-  "$(docker port "$SF_CONTAINER" 80/tcp 2>/dev/null | head -1 || echo none)"
+# Every configured bind address must actually be published (SF_BIND may be a list).
+for addr in $SF_BIND; do
+  if docker port "$SF_CONTAINER" 80/tcp 2>/dev/null | grep -qxF "${addr}:${SF_PORT}"; then
+    echo "  ok   published on                                  ${addr}:${SF_PORT}"
+  else
+    echo "  FAIL publish missing                                ${addr}:${SF_PORT}"; FAILURES=$((FAILURES+1))
+  fi
+done
+# Make an intentional LAN exposure visible instead of silently normalising it.
+for addr in $SF_BIND; do
+  case "$addr" in
+    127.0.0.1|::1) : ;;
+    *) echo "  warn ${addr}:${SF_PORT} reachable from the local network over plain HTTP (no TLS)" ;;
+  esac
+done
 
 # --- HTTP surface ----------------------------------------------------------
 check "GET /healthz"                 "200" "$(status_of /healthz)"

@@ -224,7 +224,25 @@ PR：<https://github.com/1998x-stack/anti-procrastination-todo/pull/1>
 
 **总体状态：不声明"完全通过"。** 上表 13 项 PASS，1 项部分（第 2 项公网 HTTPS，为 `NOT_VERIFIED`），另有第 7 节列出的 7 类未验证门槛与 2 个 `OPEN` 项需产品决策。
 
-## 13. 复现本报告
+## 13. 局域网访问（已开通）与逐项复核
+
+操作方要求“能在局域网浏览器里打开”，因此发布绑定从仅 loopback 扩展为 `0.0.0.0`（受 DHCP 影响的取舍见 GOTCHA-020），并重新做了完整验证：
+
+| 检查 | 结果 |
+| --- | --- |
+| 绑定 | `docker port start-first-web 80/tcp` → `0.0.0.0:8081`；`ss -tln` → `0.0.0.0:8081` |
+| 本机 loopback | `http://127.0.0.1:8081/` → 200（1587 bytes） |
+| 局域网地址 | `http://192.168.169.223:8081/` → 200（同字节数）；响应头含 CSP / nosniff / `no-store` |
+| 非 loopback 网络路径 | 另起容器经 Docker 网桥访问 `172.17.0.1:8081` 与 `192.168.169.223:8081` → 均 200 |
+| 重启持久性 | `deploy/serve.sh restart` → 绑定不变，健康检查全过 |
+| **局域网 origin 真实浏览器验证** | `SF_URL=http://192.168.169.223:8081 npm run test:e2e:deployed` → **9/9**（含非安全上下文降级路径上的完整创建→会话→刷新→导出→删除流程） |
+| 健康检查 | 27 项全过 + `warn 0.0.0.0:8081 … plain HTTP (no TLS)` |
+
+**已验证的局域网环境差异：** 该 origin 下 `window.isSecureContext === false`、`typeof crypto.randomUUID === 'undefined'`（符合规范），应用依靠 `crypto.getRandomValues` 降级路径工作；测试套件现在会**显式声明**本次验证的是哪种 origin，而不是默认假定安全上下文。
+
+**未能验证：** 主机防火墙策略（`ubuntu` 无免密 sudo，`sudo -n ufw status` 被拒）以及**从另一台真实设备**发起的连接。旁证：同机其他服务（`0.0.0.0:443`、`0.0.0.0:3001` 等）已在向局域网发布。
+
+## 14. 复现本报告
 
 ```bash
 cd /home/ubuntu/codes/anti-procrastination-todo

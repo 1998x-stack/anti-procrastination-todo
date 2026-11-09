@@ -2,7 +2,7 @@
 
 **适用 commit：** `71071bfed912`（部署时工作区为 dirty，见 release 元数据）
 **环境：** Ubuntu 24.04.3 LTS / x86_64 / Intel i5-10500（12 线程）/ 31 GiB RAM / 609 GB 可用磁盘
-**状态：** 已在本机完成部署、验证、回滚演练。**仅 loopback 提供访问**，未做公网/HTTPS 部署（无授权与域名 → `NOT_VERIFIED`，见 `docs/gotchas.md` GOTCHA-018）。
+**状态：** 已在本机完成部署、验证、回滚演练、局域网访问验证。**未做公网/HTTPS 部署**（无授权与域名 → `NOT_VERIFIED`，见 `docs/gotchas.md` GOTCHA-018）。
 
 ---
 
@@ -13,8 +13,8 @@
 | 系统没有 nginx（`command -v nginx` → 缺失），`ubuntu` 用户**无免密 sudo**（`sudo -n true` → 需要密码） | 不能 `apt install nginx`，也不能写 `/etc/nginx` |
 | 应用是**无构建**的原生 ES Modules 静态站点，运行期零依赖 | 只需要一个正确的静态 HTTP 服务（MIME + 缓存 + 安全头） |
 | Docker 29.1.3 可用，用户在 `docker` 组 | 用 **nginx:1.27-alpine 容器**承载静态文件，配置文件从仓库挂载 |
-| 80 / 443 被 `docker-ragflow-cpu-1` 占用；8080 被 `igateway-*` 占用 | **绝不复用**，改用 `127.0.0.1:8081` |
-| 未获得域名/公网授权 | **只绑定 127.0.0.1**；HTTPS 明确留作公网上线前置条件 |
+| 80 / 443 被 `docker-ragflow-cpu-1` 占用；8080 被 `igateway-*` 占用 | **绝不复用**，改用 8081 |
+| 获授权可从局域网访问，但无域名/无公网授权 | 绑定 `0.0.0.0`（loopback + LAN，见 10.1 的 DHCP 原因）；**不**做公网转发；HTTPS 留作公网上线前置条件 |
 | `code/backend/dev-server.js` 只是内存研究参考实现 | **不部署、不反代、不进容器** |
 
 选择 Docker + 挂载配置的额外好处：nginx 配置**随代码版本化、可 review、可回滚**，不污染系统 nginx，也不影响服务器上其他业务站点。
@@ -93,14 +93,15 @@ deploy/deploy.sh --no-restart   # 只构建 release 并切换 current，不动�
 5. 写 `meta/<release>.json`。
 6. `install -m 0644` 同步 nginx 配置到 `conf/`。
 7. **原子切换**：`ln -sfn releases/<rel> current.new && mv -T current.new current`。
-8. 容器不存在则 `docker run`（仅在 127.0.0.1 发布），否则 `nginx -t` + `nginx -s reload`（零停机）。
+8. 核对容器拓扑（端口绑定/镜像/文档根挂载）——**有漂移则重建容器**，否则 `nginx -t` + `nginx -s reload`（零停机）。
 9. 跑 `healthcheck.sh`，**失败即整体失败**（返回非 0）。
 
 ### 容器启动参数（由脚本生成，勿手工漂移）
 
 ```bash
+# 由 deploy.sh 从 SF_BIND/SF_PORT 生成；当前取值为 0.0.0.0:8081（见 10.1）
 docker run -d --name start-first-web --restart unless-stopped \
-  -p 127.0.0.1:8081:80 \
+  -p "$SF_BIND:$SF_PORT:80" \
   -v /home/ubuntu/apps/start-first:/srv/start-first:ro \
   -v /home/ubuntu/apps/start-first/conf/server.conf:/etc/nginx/conf.d/default.conf:ro \
   -v /home/ubuntu/apps/start-first/conf/headers.inc:/etc/nginx/conf.d/headers.inc:ro \
@@ -131,7 +132,7 @@ deploy/serve.sh container-config   # 打印挂载与端口绑定，便于核对�
 deploy/healthcheck.sh    # 27 项，全部只读；输出 ok/FAIL 明细；全通过退出码 0
 ```
 
-覆盖：容器运行、**仅 loopback 绑定**、9 个静态资源 200、MIME 合法性、缺失资源真 404、CSP/nosniff/Referrer-Policy/Permissions-Policy、`index.html` `no-store`、其他资源 `no-cache`、`server_tokens off`、**研究 API 与测试文件不可达**、无目录列表、dotfiles 403、**服务内容与服务磁盘 release 的字节一致（sha256）**。
+覆盖：容器运行、**每个 `SF_BIND` 地址都已发布**、9 个静态资源 200、MIME 合法性、缺失资源真 404、CSP/nosniff/Referrer-Policy/Permissions-Policy、`index.html` `no-store`、其他资源 `no-cache`、`server_tokens off`、**研究 API 与测试文件不可达**、无目录列表、dotfiles 403、**服务内容与服务磁盘 release 的字节一致（sha256）**。非回环绑定会额外打印 `warn` 行提醒无 TLS。
 
 ---
 
@@ -162,13 +163,54 @@ deploy/rollback.sh 20261109T063425Z-71071bfed912  # 切到指定 release
 
 | 端口 | 绑定 | 说明 |
 | --- | --- | --- |
-| 8081 | **127.0.0.1** | 站点（本次唯一对外入口，仅本机） |
+| 8081 | **0.0.0.0（本机 loopback + 局域网）** | 站点唯一入口。实际可达面 = `lo` + `eno1`(LAN) + Docker 网桥（172.x，仅本机与容器可达） |
 | 80 / 443 | 0.0.0.0（**他人容器**） | ragflow；本项目不使用 |
 | 8080 | 0.0.0.0（**他人容器**） | igateway；本项目不使用 |
 | 4173 | 127.0.0.1（仅测试期间） | Playwright 开发 harness（`python3 -m http.server`），不是生产服务 |
 | 4317 | 127.0.0.1（仅显式启用时） | 研究 API 参考实现；`verify:lab-api` 结束会关闭并已断言端口不再监听 |
 
-核查命令：`docker port start-first-web 80/tcp`（必须只有 `127.0.0.1:8081`）、`ss -tln | grep 8081`。
+核查命令：`docker port start-first-web 80/tcp`、`ss -tln | grep 8081`、`deploy/healthcheck.sh`（会打印 "published on …" 并对非回环绑定发出 warn）。
+
+### 10.1 绑定地址由 `deploy.env` 记录（可重复部署）
+
+部署拓扑保存在 **`${SF_DEPLOY_ROOT}/deploy.env`**（本机为 `/home/ubuntu/apps/start-first/deploy.env`），由 `deploy/env.sh` **解析**（`KEY=value`，从不 `source`，不能执行代码）。优先级：**显式环境变量 > deploy.env > 内置默认值**。
+
+这样做的原因：如果只靠"部署时传一次环境变量"，后续任何人直接跑 `deploy/deploy.sh` 都会把绑定悄悄改回 loopback，LAN 地址会莫名失效。
+
+`SF_BIND` 支持**空格分隔的多个地址**：
+
+```bash
+SF_BIND="127.0.0.1"                    # 最保守：只允许本机
+SF_BIND="0.0.0.0"                      # 所有接口（当前采用，见下）
+SF_BIND="127.0.0.1 192.168.169.223"    # loopback + 指定局域网地址（需静态 IP）
+```
+
+**当前部署的取值与原因（重要）：**
+
+```
+SF_BIND=0.0.0.0
+SF_PORT=8081
+SF_URL=http://127.0.0.1:8081     # 本地健康检查与测试仍走 loopback
+```
+
+- 操作方要求**从局域网浏览器访问**，因此必须超出 loopback。
+- **没有**绑定具体地址 `192.168.169.223`：`ip -4 addr show eno1` 显示该地址为 **`dynamic`（DHCP，租约约 3.5 天）**。把 Docker 发布钉死在某个具体地址上，一旦租约变化/路由器重启，容器会以 `cannot assign requested address` 起不来 —— 那是**连 loopback 一起失效的全面中断**。`0.0.0.0` 不受地址变化影响。
+- 本机唯一非回环网卡是 `eno1`；其余地址是 Docker 网桥（172.17–172.22.0.1），只对本机与容器可达。
+- **切换到静态地址 + TLS 后**应改为钉住地址或退回 `SF_BIND=127.0.0.1`（由反向代理转发），见第 12 节。
+
+### 10.2 绑定漂移会被检测并重建容器
+
+`deploy.sh` 会比较**期望的端口绑定、镜像、文档根挂载**与现有容器；一旦不一致就 `docker rm -f` 后按新拓扑重建，并等待容器内 nginx 就绪。避免"改端口却没生效"这类"成功但什么都没做"的问题。
+
+### 10.3 局域网访问的已知含义（必须告知使用者）
+
+| 含义 | 说明 |
+| --- | --- |
+| **IndexedDB 按 origin 隔离** | `http://192.168.169.223:8081` 与 `http://127.0.0.1:8081` 是**两个不同的数据库**。在 loopback 下创建的任务**不会**出现在局域网地址下，反之亦然。这不是 bug，也**不会**自动迁移 |
+| **非安全上下文** | 局域网纯 HTTP 不是安全上下文：`crypto.randomUUID` 按规范不可用，应用改用已实现的 `crypto.getRandomValues` 降级路径（已实测通过，见 GOTCHA-005）。Service Worker / 安装型 PWA 等能力仍不可用（本项目未使用） |
+| **明文传输** | 局域网内为纯 HTTP。应用本身**不向服务器发送任何任务内容**（已断言无外部请求），但同一局域网内的其他设备理论上可观察到流量。**不要**把 8081 端口转发到公网 |
+| **防火墙未验证** | 本机装有 ufw，但 `ubuntu` 用户无免密 sudo，**无法**确认其策略（`sudo -n ufw status` 被拒）。同机其他容器已在 `0.0.0.0` 上对外发布（如 443/3001），说明入站到本机一般是通的。请在浏览器/另一设备上实测确认 |
+| **重启后自动恢复** | `--restart unless-stopped` + Docker 保存的端口配置 → 主机重启后仍以相同绑定启动（已实测 `serve.sh restart` 后绑定不变） |
 
 ---
 
@@ -188,7 +230,7 @@ deploy/rollback.sh 20261109T063425Z-71071bfed912  # 切到指定 release
 
 当前**未配置** HTTPS，因为未获域名与公网授权。公网部署必须补齐：
 
-1. TLS 终结点（宿主 nginx/Caddy 或云 LB）+ 证书自动续期；`SF_BIND` 可继续用 loopback，由反代转发到 `127.0.0.1:8081`。
+1. TLS 终结点（宿主 nginx/Caddy 或云 LB）+ 证书自动续期；公网场景建议把 `SF_BIND` 退回 `127.0.0.1`（由反代转发到 `127.0.0.1:8081`），避免直挂公网。
 2. HTTP → HTTPS 301 跳转 + `Strict-Transport-Security`。
 3. 更新 `deploy/nginx/server.conf` 的 `server_name` 与 `SF_URL`。
 4. 复核 CSP 是否需按新拓扑调整（当前为 `default-src 'self'`，不依赖任何外部域）。

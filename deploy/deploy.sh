@@ -86,25 +86,60 @@ if [[ "$RESTART" == "0" ]]; then
   exit 0
 fi
 
-# --- Ensure the container exists, then validate + reload --------------------
+# --- Ensure the container exists with the right topology, then reload ---------
+# A stale container would silently keep the OLD port bindings, so drift is
+# detected and the container is recreated instead of "successfully" doing nothing.
+PUBLISH_ARGS=()
+DESIRED_PORTS=""
+for addr in $SF_BIND; do
+  PUBLISH_ARGS+=(-p "${addr}:${SF_PORT}:80")
+  DESIRED_PORTS+="${addr}:${SF_PORT}"$'\n'
+done
+DESIRED_PORTS="$(printf '%s' "$DESIRED_PORTS" | sort)"
+
+RECREATE=0
 if ! docker inspect "$SF_CONTAINER" >/dev/null 2>&1; then
+  RECREATE=1
+  sf_log "container does not exist; creating"
+else
+  ACTUAL_PORTS="$(docker port "$SF_CONTAINER" 80/tcp 2>/dev/null | sort)"
+  ACTUAL_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$SF_CONTAINER" 2>/dev/null)"
+  if [[ "$ACTUAL_PORTS" != "$DESIRED_PORTS" ]]; then
+    RECREATE=1; sf_log "port bindings differ (have: $(printf '%s' "$ACTUAL_PORTS" | tr '\n' ' ')) -> recreating"
+  elif [[ "$ACTUAL_IMAGE" != "$SF_IMAGE" ]]; then
+    RECREATE=1; sf_log "image differs ($ACTUAL_IMAGE != $SF_IMAGE) -> recreating"
+  elif ! docker inspect -f '{{json .HostConfig.Binds}}' "$SF_CONTAINER" | grep -qF "${SF_DEPLOY_ROOT}:/srv/start-first:ro"; then
+    RECREATE=1; sf_log "document root mount differs -> recreating"
+  fi
+fi
+
+if [[ "$RECREATE" == "1" ]]; then
+  docker rm -f "$SF_CONTAINER" >/dev/null 2>&1 || true
   sf_log "creating container ${SF_CONTAINER} on ${SF_BIND}:${SF_PORT}"
   docker run -d \
     --name "$SF_CONTAINER" \
     --restart unless-stopped \
-    -p "${SF_BIND}:${SF_PORT}:80" \
+    "${PUBLISH_ARGS[@]}" \
     -v "${SF_DEPLOY_ROOT}:/srv/start-first:ro" \
     -v "${SF_DEPLOY_ROOT}/conf/server.conf:/etc/nginx/conf.d/default.conf:ro" \
     -v "${SF_DEPLOY_ROOT}/conf/headers.inc:/etc/nginx/conf.d/headers.inc:ro" \
     -v "${SF_DEPLOY_ROOT}/conf/headers-html.conf:/etc/nginx/conf.d/headers-html.conf:ro" \
     --log-opt max-size=10m --log-opt max-file=3 \
     "$SF_IMAGE" >/dev/null
+  # nginx needs a moment to bind inside the freshly created container.
+  for _ in $(seq 1 25); do docker exec "$SF_CONTAINER" nginx -t >/dev/null 2>&1 && break; sleep 0.2; done
 else
-  sf_log "container exists; testing config and reloading"
+  sf_log "container topology unchanged; testing config and reloading"
   docker exec "$SF_CONTAINER" nginx -t
   docker exec "$SF_CONTAINER" nginx -s reload
 fi
 
 # --- Health check ----------------------------------------------------------
 "${REPO}/deploy/healthcheck.sh" || sf_die "health check failed after deploy of ${REL_NAME}"
-sf_log "release ${REL_NAME} is live at ${SF_URL}"
+sf_log "release ${REL_NAME} is live at: $(sf_urls)"
+for addr in $SF_BIND; do
+  case "$addr" in
+    127.0.0.1|::1) : ;;
+    *) sf_log "NOTE: ${addr}:${SF_PORT} is reachable from the local network over plain HTTP (no TLS). Do not expose this beyond a trusted LAN." ;;
+  esac
+done

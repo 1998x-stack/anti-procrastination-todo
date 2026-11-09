@@ -80,8 +80,8 @@ npm run test:e2e:deployed     # 9 个用例，针对**已部署** nginx origin�
 
 | 项目 | 正常值 |
 | --- | --- |
-| 访问地址 | `http://127.0.0.1:8081` |
-| 绑定地址 | **仅** `127.0.0.1:8081`（`docker port start-first-web 80/tcp` 必须只有这一条） |
+| 访问地址 | 本机 `http://127.0.0.1:8081`；局域网 `http://192.168.169.223:8081`（已获操作方授权开启） |
+| 绑定地址 | `SF_BIND=0.0.0.0`（当前值，记录在 `/home/ubuntu/apps/start-first/deploy.env`）；`docker port start-first-web 80/tcp` → `0.0.0.0:8081` |
 | 容器 | `start-first-web`，镜像 `nginx:1.27-alpine`，`Up`，`restart=unless-stopped` |
 | `/healthz` | `200` + body `ok` |
 | `/` | `200`, `text/html; charset=utf-8`, `Cache-Control: no-store` |
@@ -98,7 +98,7 @@ npm run test:e2e:deployed     # 9 个用例，针对**已部署** nginx origin�
 | 80 / 443 | `docker-ragflow-cpu-1` 容器 | **禁止改动**，他人业务 |
 | 8080 | `igateway-*` 容器 | **禁止改动** |
 | 4173 | 本项目 Playwright 开发 harness（测试时临时占用） | 仅用于测试 |
-| 8081 | **本项目站点**（`start-first-web`） | 可安全重载 |
+| 8081 | **本项目站点**（`start-first-web`，当前 `0.0.0.0`：loopback + LAN） | 可安全重载；非回环绑定由 `deploy.env` 记录 |
 | 4317 | **本项目研究 API**（仅 `START_FIRST_LOCAL_TELEMETRY=1` 时临时占用） | 用完必须停止并确认端口关闭 |
 
 ### A.7 日志与配置文件位置
@@ -126,7 +126,7 @@ docker exec start-first-web nginx -t  # 只校验配置
 
 ### A.9 必须先获得授权的操作
 
-- 任何**公网暴露**：把 `SF_BIND` 改成 `0.0.0.0`、复用 80/443/8080、加反向代理、签发证书。
+- 任何**公网暴露**：把 8081 转发到互联网、加反向代理、签发证书。当前 `SF_BIND=0.0.0.0` 仅用于**可信局域网**（无 TLS），不得再扩大。
 - `sudo` / `apt` 安装（本机 `ubuntu` 用户**无免密 sudo**，见 GOTCHA-013）。
 - 触碰其他容器/其他项目（ragflow、igateway、tmc-*、docker-*）。
 - `docker system prune`、删除 `releases/`、删除 `meta/`。
@@ -164,6 +164,7 @@ docker exec start-first-web nginx -t  # 只校验配置
 | GOTCHA-017 | Testing | P2 | 屏幕阅读器、WCAG 2.2 AA、200% 缩放未验证 | NOT_VERIFIED | [→](#gotcha-017无障碍审计未验证) |
 | GOTCHA-018 | Deployment | P1（公网阻断项） | HTTPS、域名、证书、HSTS 未配置 | NOT_VERIFIED | [→](#gotcha-018https-与域名部署未验证公网阻断项) |
 | GOTCHA-019 | Testing | P3 | 长会话、休眠唤醒、改系统时钟未验证 | NOT_VERIFIED | [→](#gotcha-019长会话休眠唤醒与系统时钟修改未验证) |
+| GOTCHA-020 | Deployment | P1（若钉住 DHCP 地址） | Docker 绑具体 IP、容器起不来、cannot assign requested address、租约变化 | FIXED | [→](#gotcha-020把-docker-发布钉在-dhcp-地址上会让容器在租约变化后起不来) |
 
 ---
 
@@ -797,6 +798,60 @@ command -v nginx   # → MISSING
 
 ---
 
+### GOTCHA-020：把 Docker 发布钉在 DHCP 地址上会让容器在租约变化后起不来
+
+**状态：** FIXED（已避免，并在 `deploy.env` 中写明原因）
+**优先级：** P1（触发时整体不可用，连 loopback 一起挂）
+**类别：** Deployment / Linux
+**发现环境：** 操作方要求开通局域网访问时（2026-11-09）
+
+**症状（已避开，非已发生故障）：** 主机 IP 变化/路由器重启后容器无法启动：
+`Error response from daemon: … cannot assign requested address`
+站点（包括本机 loopback）全部不可用。仅凭 `curl` 会表现为“什么都没有”，容易误判为 nginx 配置坏了。
+
+**最小复现步骤（隔离环境）：**
+```bash
+SF_BIND=192.0.2.77 SF_PORT=8099 SF_CONTAINER=start-first-dhcp-repro \
+  SF_DEPLOY_ROOT=/tmp/sf-dhcp-repro bash deploy/deploy.sh
+# 192.0.2.77 不属于本机 → docker run 失败：cannot assign requested address
+```
+
+**根因：** 为了“只暴露一个局域网地址”而写成 `-p 192.168.169.223:8081:80`，但该地址是 **DHCP 动态分配**：
+```
+$ ip -4 addr show eno1
+    inet 192.168.169.223/23 … scope global dynamic noprefixroute eno1
+    valid_lft 299452sec preferred_lft 299452sec
+```
+租约失效后内核无法绑定不再属于本机的地址，容器启动失败。
+
+**根因证据：** `dynamic` 标记 + `valid_lft`（约 3.5 天）；网络由 NetworkManager + cloud-init/netplan 管理，`/etc/netplan/*.yaml` 未配置静态地址。
+
+**修复方式（已采用）：** `SF_BIND=0.0.0.0`。在本机上它等价于 `lo` + `eno1`(LAN) + Docker 网桥（172.x，仅本机与容器可达），既不依赖具体地址也没有真正扩大到额外网络。同时 `SF_URL=http://127.0.0.1:8081`，让本地健康检查与测试仍走 loopback。
+未来确定地址后（静态 IP 或反向代理转发）再改为 `SF_BIND=127.0.0.1 192.168.169.223` 或 `SF_BIND=127.0.0.1`。
+
+**影响范围：** 仅发布绑定；`releases/`、`conf/`、用户数据（浏览器 IndexedDB）均不受影响。
+
+**修复验证：**
+```
+docker port start-first-web 80/tcp      → 0.0.0.0:8081
+curl 127.0.0.1:8081/healthz             → 200
+curl 192.168.169.223:8081/healthz       → 200
+docker run --rm --network bridge curlimages/curl -s -o/dev/null -w '%{http_code}' 172.17.0.1:8081/healthz   → 200（非 loopback 路径）
+deploy/serve.sh restart                 → 绑定不变
+deploy/healthcheck.sh                   → All health checks passed（含 warn：无 TLS 的局域网暴露）
+SF_URL=http://192.168.169.223:8081 npm run test:e2e:deployed   → 9/9
+```
+
+**回归测试：** `deploy/healthcheck.sh` 改为逐地址断言“每个 `SF_BIND` 都已发布”，并对非回环地址打印 `warn`；`deploy.sh` 新增绑定/镜像/挂载**漂移检测与容器重建**；`tests/deployed/deployed.spec.js` 新增“本次验证的 origin 是否为安全上下文”的显式断言（loopback/https 断言 `crypto.randomUUID` 可用；局域网纯 HTTP 则断言走 `getRandomValues` 降级且任务仍可创建）。
+
+**预防措施：** 钉具体地址前先用 `ip -4 addr show <iface>` 确认不是 `dynamic`；把拓扑写入 `deploy.env`（被解析、不 `source`，不能执行代码）以保证可重复。
+
+**关联文件与提交：** `deploy/env.sh`、`deploy/deploy.sh`、`deploy/healthcheck.sh`、`tests/deployed/deployed.spec.js`、`/home/ubuntu/apps/start-first/deploy.env`。
+
+**Agent 快速定位提示：** 若容器突然起不来且日志是 `cannot assign requested address`，先查 `SF_BIND` 是否钉了某个具体 IP、该 IP 是否仍在本机。临时解决：改成 `0.0.0.0` 或换成当前真实地址后重跑 `deploy/deploy.sh`。**不要**去改 nginx 配置或反复 `docker restart`。
+
+---
+
 ## D. Known Limitations（能力边界，不是 BUG）
 
 以下均为**产品边界**，请勿当作待修缺陷，也不要对外宣称已实现：
@@ -833,8 +888,10 @@ deploy/serve.sh status
 deploy/healthcheck.sh                             # 期望 "All health checks passed."
 
 # 4. 端口与暴露面（只读）
-ss -tln | grep -E ':8081|:4173|:4317'             # 8081 仅 127.0.0.1；4173/4317 不应长期监听
-docker port start-first-web 80/tcp                # 必须只有 127.0.0.1:8081
+ss -tln | grep -E ':8081|:4173|:4317'             # 8081 按 SF_BIND（当前 0.0.0.0）；4173/4317 不应长期监听
+docker port start-first-web 80/tcp                # 应与 deploy.env 的 SF_BIND/SF_PORT 一致
+cat /home/ubuntu/apps/start-first/deploy.env      # 服务器本机拓扑（绑定地址、端口、SF_URL）
+for u in http://127.0.0.1:8081 http://192.168.169.223:8081; do curl -sS -o /dev/null -w "$u %{http_code}\n" "$u/healthz"; done
 
 # 5. 站点真实性（只读）
 curl -sS http://127.0.0.1:8081/healthz           # ok
@@ -850,7 +907,9 @@ npm run verify:lab-api                            # 期望 31/31（会临时占�
 
 **安全（无需授权）：** 上面全部只读命令、`npm run verify/test:e2e`、`deploy/healthcheck.sh`、`deploy/serve.sh status|logs`、`deploy/rollback.sh --list`、`docker exec start-first-web nginx -t`。
 
-**必须先授权：** 改 `SF_BIND` 为 `0.0.0.0` / 复用 80·443·8080 / 加反向代理或证书；`sudo`/`apt`；停止或修改他人容器；`docker system prune`；删除 `releases/`/`meta/`；公网暴露研究 API；向远端 `main` 推送或合并。
+**必须先授权：** 把 8081 转发到互联网 / 加反向代理或证书 / 把 `SF_BIND` 再扩大；`sudo`/`apt`；停止或修改他人容器；`docker system prune`；删除 `releases/`/`meta/`/`deploy.env`；公网暴露研究 API；向远端 `main` 推送或合并。
+
+> **当前暴露面（重要）：** 站点在 **`0.0.0.0:8081`**，即**可信局域网可达、无 TLS**（操作方明确请求）。它**不是**公网部署：不要把 8081 转发到互联网；IndexedDB 按 origin 隔离，`http://192.168.169.223:8081` 与 `http://127.0.0.1:8081` 是**两个独立数据库**。
 
 **接手顺序建议：**
 1. 先第 3、5 步确认"站点是不是真的健康"。
