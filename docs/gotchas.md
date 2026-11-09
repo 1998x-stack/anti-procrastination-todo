@@ -170,8 +170,10 @@ docker exec start-first-web nginx -t  # 只校验配置
 | GOTCHA-023 | Deployment | P1 | 拓扑漂移触发 docker rm -f | FIXED | [详情](#gotcha-023) |
 | GOTCHA-024 | Security | P1 | 0.0.0.0 + 无 TLS + 防火墙未验证 | OPEN | [详情](#gotcha-024) |
 | GOTCHA-025 | Security | P2 | deploy.env 任意变量名污染运行环境 | FIXED | [详情](#gotcha-025) |
-| GOTCHA-026 | Deployment | P2 | 未版本化 JS/CSS 跨发布切换可能混版本 | OPEN | [详情](#gotcha-026) |
+| GOTCHA-026 | Deployment | P2 | 未版本化 JS/CSS 跨发布切换可能混版本 | **REPRODUCED** / OPEN | [详情](#gotcha-026) |
 | GOTCHA-027 | Deployment | P2 | --no-restart 仍改变 current | FIXED | [详情](#gotcha-027) |
+| GOTCHA-028 | Deployment | P2 | 失败发布留下的"无法激活 release"阻塞默认回滚链 | FIXED | [详情](#gotcha-028) |
+| GOTCHA-029 | Deployment | P1 | 实地部署根目录无配置归档，PR #2 后回滚被阻塞（仅自动补齐上一版） | OPEN | [详情](#gotcha-029) |
 
 ---
 
@@ -1001,3 +1003,175 @@ npm run verify:lab-api                            # 期望 31/31（会临时占�
 2. 再读本文件 B 节索引表，按症状关键词定位。
 3. 修改前先跑 `npm run verify` + `npm run test:e2e` 建立基线，**再**动代码（哪怕是文档改动）。
 4. 改完必须：单项回归 → 全量回归（`verify` + `test:e2e` + `test:e2e:deployed` + `verify:lab-api`）→ 重新部署 → `healthcheck` 通过 → 更新本文档。
+
+---
+
+## Round 3 review（PR #2 在真实 Linux 服务器上的孤立验证，2026-11-09）
+
+**验证环境：** Ubuntu 24.04.3 LTS · Docker 29.1.3 · nginx/1.27.5（容器）· Node v22.23.3 · Chromium 141.0.7390.37 (Playwright build 1194)
+**被测 commit：** `0767c05e0a642068b1833499c2e0ce261a2477fd`（分支 `verify/linux-field-validation-20261109`）
+**孤立环境：** 部署根 `/home/ubuntu/apps/start-first-pr2-staging`、容器 `start-first-pr2-staging`、`127.0.0.1:18081`。**真实运行中的服务**（`start-first-web` @ `0.0.0.0:8081、`/home/ubuntu/apps/start-first`）在每个场景前后都断言了容器 ID / current 软链 / 端口绑定 / HTTP 状态未变。
+**证据边界：** 本节除 GOTCHA-029 外均为**在真实 Docker + 真实 nginx 上的隔离现场实测**；GOTCHA-029 的部分数据来自**实地部署根目录的只读快照 + 其副本上的升级预演**（未修改真实服务）。不覆盖 GOTCHA-001～020 的原有现场证据。
+
+### GOTCHA-021 / 022 / 023 / 025 / 027 的再次验证（真实 nginx，非仅 CI）
+
+| ID | 本次真实环境验证方式 | 结果 |
+| --- | --- | --- |
+| 021 | 孤立根上连续默认回滚，直到最旧 release | PASS：只向更旧移动（`…792010157 -> …171485480`），到最旧后**拒绝**且不前进 |
+| 022 | 用 `SF_URL=http://127.0.0.1:19999` 使激活后健康检查必败 | PASS：非零退出、输出 `restoring previous code AND nginx configuration`、current 与三个 nginx 配置文件 sha256 均恢复到失败前、容器 ID 未变、站点重新 200、无残留 `.activation-backup.*` |
+| 023 | 注入镜像 / 端口 / 文档根挂载漂移（真实 `docker inspect`/`docker port`） | PASS：全部 fail-closed，报 `image drift`/`port drift`/`mount drift`，**容器 ID 未变（从未执行 docker rm -f）**，current/配置未变，站点仍 200 |
+| 025 | 在孤立根写 `PATH=/tmp/attacker-path` 的 deploy.env | PASS：脚本拒绝执行（`unknown/invalid key`），当前发布未变 |
+| 027 | 真实执行 `deploy.sh --no-restart` | PASS：release 与配置归档已生成、preflight 通过，但 `current` **不存在**、`conf/` 未改动 |
+
+因此原“仅在 CI 通过”的限制已解除：以上机制**已在真实 Docker + 真实 nginx + 真实文件系统上复现并验证**（`tests/deployment/staging-fault-injection.sh`，89/89）。
+
+### GOTCHA-026
+
+**未版本化静态资源的跨发布混版本风险（REPRODUCED / OPEN / P2 / Deployment）**
+
+**状态更新：** 由“代码审查推测”升级为**已复现**。实验：`tests/deployment/mixed-version-lab.mjs`（11/11 观察项）。
+
+**症状（实测）：** 同一份文档在执行过程中拿到了**两个不同 release 的模块**：文档 HTML 来自 release A，而 `code/frontend/main.js`、`code/domain/core.js`、`code/frontend/styles.css` 均来自 release B。
+
+**最小复现步骤：**
+```bash
+# 孤立 staging 环境；用带标记（MIXMARK-A/B）的仓库副本，标记只影响可观测性
+SF_URL=http://127.0.0.1:18081 SF_DEPLOY_ROOT=<staging根> MIX_SHIM=<shim仓库> \
+  node tests/deployment/mixed-version-lab.mjs
+# 步骤：加载页面并“挂住” main.js 请求 → 真实执行 deploy.sh（切换 current）→ 放行请求
+```
+
+**真实证据：**
+```
+  ok   HTML in the document came from release A
+  ok   deploy really switched current  -> 20261109T081433Z-… -> 20261109T081437Z-…
+  ok   the same document then executed main.js from release B
+       -> document HTML=release A, main.js=release B, core.js=release B, styles.css=release B
+  ok   the mixed state really spans two different release directories
+```
+两个标记分别落在两个不同的 `releases/<name>/` 目录中，因此这**不是**观测误差。
+
+**跨 release schema 偏移时的实际后果（实测，非推测）：**
+把 release A 的 `core.js` 中 `emptyState().schemaVersion` 改成 97（模拟真实跨版本 schema 变化），其余资源来自 release B：
+```json
+{"screen":"inbox","hasCaptureInput":false,"errorNotice":true,
+ "notice":"本地存储不可用。为了避免误以为已经保存，当前无法创建任务。请检查浏览器隐私设置或尝试常规窗口。"}
+```
+结论：应用**fail-closed**（`UNSUPPORTED_SCHEMA` → 存储不可用、无法创建任务），**没有**静默清空数据、**没有**伪造保存成功；既有任务（1 条）在混版本前后**完好**（`before=1 after={"tasks":1,"readError":null}`）。即：最坏现实后果是“刷新前不可用”，**不是数据损坏**。
+
+**仍存在的风险：** 混版本窗口真实存在（HTML 与模块请求之间发生发布即可命中；模块图内部的嵌套 import 窗口更窄但同样存在）。当前 `Cache-Control: no-cache` 只保证重新验证，无法阻止跨版本取值。
+
+**最小修复方案（已设计，尚未实现 —— 需单独变更计划）：**
+1. 部署时把 `index.html` 的 `./code/`、`./assets/` 引用重写为**按发布固定**的 `/v/<REL_NAME>/…`（仅 3 处引用；`href="./"`、`#main` 保持不动，因此不改交互语义）。应用内部相对 import 会自然解析到同一 `release` 前缀，无需改动任何模块代码（不引入构建框架）。
+2. nginx 新增 `location ^~ /v/`：`alias /srv/start-first/releases/$rel/…;` + `Cache-Control: public, max-age=31536000, immutable`，并复用同一套安全响应头（需要第 4 个 header snippet，且必须在 `docker run`、`deploy.sh` 的临时预检容器、`rollback.sh` 的预检容器**三处**同步挂载）。
+3. 回归测试：断言服务端 `index.html` 只引用自身 release 前缀；旧 release 的 `/v/<old>/…` 在新发布后仍可取（不可变）；受控延迟下不再出现跨 release 取值。
+
+**为什么本轮未实施：** 方案需要改动 nginx 配置、挂载清单（3 处）与部署产物，属于架构性变更；本轮预算内无法完成“实施 + 全套真实环境回归 + 文档”的闭环。按“不经证据不引入复杂方案、不为修一个问题顺带重构”的规则，保留已复现证据与设计方案，作为下一轮首选工作项。**当前不应对外宣传已解决混版本。**
+
+**Agent 快速定位提示：** 若用户报告“刷新前突然提示本地存储不可用 / 无法创建任务”，先确认是否刚发生过发布；取 `document` 里 HTML 的来源与 `main.js` 的来源对比（或检查响应 ETag/Last-Modified 是否跨 release），**不要**先怀疑 IndexedDB 损坏（数据实测完好）。
+
+### GOTCHA-028
+
+**失败的发布把“永远无法激活的 release”留在 `releases/` 中，阻塞默认回滚链（FIXED / P2 / Deployment）**
+
+**症状：** 一次失败的发布尝试（候选 nginx 配置非法、release 缺文件、含软链接等）之后，`deploy/rollback.sh`（不带参数）会**拒绝回滚**，即使存在更旧且健康的 release：
+```
+[deploy …] ERROR: target nginx config failed validation
+# 或
+[deploy …] ERROR: no archived nginx config for <release> (server.conf); rollback blocked
+```
+操作方失去“一键回到上一个可用版本”的能力，恰好发生在最需要它的时刻。
+
+**最小复现步骤（孤立环境）：**
+```bash
+# 1) 用仓库副本注入一个非法 server.conf，执行真实 deploy（会安全失败）
+printf 'server { listen 80; this_is_not_valid_directive; }\n' > $SHIM/deploy/nginx/server.conf
+( cd $SHIM && env -u SF_REPO_ROOT bash deploy/deploy.sh )     # 失败，站点不受影响
+# 2) 观察：新 release 与其配置归档一起留了下来
+ls $SF_DEPLOY_ROOT/releases | tail -1
+grep -l this_is_not_valid_directive $SF_DEPLOY_ROOT/config-releases/*/server.conf
+# 3) 默认回滚链在此处被卡住
+bash deploy/rollback.sh        # 拒绝
+```
+
+**真实错误日志（脱敏，来源：staging 根，nginx/1.27.5 容器）：**
+```
+[deploy 08:07:10Z] ERROR: target nginx config failed validation
+[deploy 08:09:19Z] ERROR: no archived nginx config for 20261109T065426Z-14c0253d0eff (server.conf); rollback blocked
+```
+
+**根因及证据：** `deploy/deploy.sh` 在完整性/软链接/预检等**门控之前**就创建了 `releases/<REL>` 与 `config-releases/<REL>/`；失败后两者留在磁盘上。`deploy/rollback.sh` 的默认目标 = “比当前更旧的**最新** release”，因此这个永远无法激活的条目会成为**第一个**回滚候选并阻断整条链。
+实测证据（staging 根，修复前）：
+- `grep -l this_is_not_valid_directive config-releases/*/server.conf` → 2 个“毒归档”；
+- 另有 4 个 release **完全没有**归档（`releases/*/` 有目录、`config-releases/*/` 不存在）；
+- 默认回滚链在毒条目处停止：连续默认回滚只下移到 `…080544` 就报错，而更旧健康 release 仍然存在；
+- 负控制：把 `deploy.sh` 中的隔离逻辑删除后离线契约 `ok 10` **失败**（`never-activated release left in releases/ (7 -> 8)`，退出码 1）。
+
+**修复文件与代码位置：** `deploy/deploy.sh` —— 新增 `quarantine_unactivated_release()` 与**早期 EXIT trap**（`fail_handler`）：任何在“创建 release 之后、成功激活之前”的失败，都把 `releases/<REL>` 与 `config-releases/<REL>` **移入 `rejected-releases/`**（保留证据、移出回滚搜索路径）。该早期 trap 会被随后的激活 trap **有意替换**：一旦进入激活阶段，配置已通过预检，该 release 是合法的回滚目标，必须保留。
+
+**回归测试：**
+- `tests/deployment/scripts-regression.sh` → `ok 10: never-activated releases are quarantined and cannot block rollback`（离线，CI 覆盖；含上述负控制）
+- `tests/deployment/staging-fault-injection.sh` → `S4`（真实 nginx：断言 `releases/` 不增长、`rejected-releases/` 保留证据、回滚路径中无非法归档、站点仍 200）+ `S4b`（失败预检之后**默认回滚仍能达标到更旧 release**）
+
+**实际运行结果：** 离线 10/10；真实环境 89/89，`S4b` 断言通过（`…082147Z -> …082144Z` 严格更旧）。
+
+**仍存在的风险：** 修复只防止**新增**污染，不清除**历史**污染。若某个部署根已经存在毒条目（非法归档或完全缺归档），默认回滚仍会被卡住。补救一行：
+```bash
+R=<部署根>; for f in $(grep -l this_is_not_valid_directive $R/config-releases/*/server.conf 2>/dev/null); do
+  d=$(basename $(dirname $f)); mkdir -p $R/rejected-releases
+  mv $R/releases/$d $R/rejected-releases/$d.legacy 2>/dev/null; mv $R/config-releases/$d $R/rejected-releases/$d.legacy.config; done
+# 并另行处理“完全缺归档”的 release（同上，先移出 releases/）
+```
+
+**下一位 Agent 快速定位提示：** 如果**回滚突然拒绝**而站点其实正常，先执行 `deploy/rollback.sh --list` 与
+`for d in <root>/releases/*/; do rel=$(basename $d); [ -f <root>/config-releases/$rel/server.conf ] || echo "no archive: $rel"; done`
+找出无法激活的条目；**不要**手工把 `current` 软链指到别处，也不要删除健康 release 的归档。
+
+### GOTCHA-029
+
+**实地部署根目录的 release 早于“配置归档”机制，升级到 PR #2 后回滚被阻塞（仅自动补齐上一版）（OPEN / P1 / Deployment）**
+
+**发现环境：** 真实运行中的部署根 `/home/ubuntu/apps/start-first`（只读审计）+ 其**副本**上的升级预演（`/home/ubuntu/apps/start-first-livecopy` + 容器 `start-first-livecopy` + `127.0.0.1:18083`，预演后已删除）。**真实服务未被修改**（容器 ID、`current`、`0.0.0.0:8081` 绑定、HTTP 200 均未变）。
+
+**症状：** 实地根目录有 6 个 release，但 `config-releases/` **根本不存在**（这些 release 由 PR #2 之前的 `deploy.sh` 创建）。因此 PR #2 引入的、要求“目标 release 必须有归档配置”的 `rollback.sh` 在实地根上**一次也回滚不了**：
+```
+[deploy 08:09:19Z] ERROR: no archived nginx config for 20261109T065426Z-14c0253d0eff (server.conf); rollback blocked
+```
+
+**最小复现步骤：**
+```bash
+R=/home/ubuntu/apps/start-first            # 只读
+ls -1 $R/releases | wc -l                  # 6
+ls -1 $R/config-releases 2>/dev/null | wc -l   # 0
+# 在副本上预演（不碰真实服务）
+
+cp -a $R /tmp/livecopy && rm -f /tmp/livecopy/deploy.env
+SF_DEPLOY_ROOT=/tmp/livecopy SF_CONTAINER=<新容器> SF_PORT=<空闲端口> \
+  bash deploy/rollback.sh                  # -> ERROR: no archived nginx config … rollback blocked
+```
+
+**根因及证据：** PR #2 把“版本化配置归档”作为回滚的前提（这是 GOTCHA-022 的正确修复），但历史 release 在归档机制出现之前就已存在。`deploy.sh` 里有一段**遗留兼容**逻辑：仅当 `config-releases/<当前release>` 不存在时，用 `conf/` 里的**当前生效配置**回填**这一个** release。因此：
+- 首次用 PR #2 的 `deploy.sh` 发布**成功之后**：`config-releases/<升级前的当前版>/` 会被回填 → **一步回滚可用**（实测：副本上回填后 `rolled back from …080929Z to …065525Z`，`All health checks passed`）；
+- 再往前的第二次回滚**仍被阻塞**（实测：`ERROR: no archived nginx config for 20261109T065426Z-…`）；
+- 回填的语义是“**升级前正在运行**的那份配置”，而不是该 release 历史上真正使用过的配置——对 GOTCHA-022 想防的“代码与配置不同步回滚”场景，这一点需要在变更计划里明确接受。
+
+**影响范围：** 只影响**回滚深度**与**升级窗口内的恢复选项**；当前站点与数据不受影响（fail-closed）。若操作方在升级后立即需要深回滚，会发现只能回退一步。
+
+**建议（需操作方变更计划，故状态为 OPEN）：**
+1. 升级**前**为可能需要回退的历史 release 补齐归档（从该 release 当时的 nginx 配置可信来源复制到 `config-releases/<rel>/`）；
+2. 或明确接受“只保证一步回滚”，并在变更窗口内保留一份手写恢复步骤（`ln -sfn releases/<rel> current.new && mv -T …` + `docker exec … nginx -s reload`）；
+3. 升级后**必须**用 `deploy/rollback.sh` 在副本或预发环境演练一次，确认能回到上一个版本；
+4. 不要在真实服务上直接验证回滚。
+
+**仍存在的风险：** 不补齐归档时，深层回滚能力实质不可用（虽然 fail-closed 且不会造成错误状态）。此外真实根目录的 6 个 release 的归档缺失是**既有状态**，不是本轮引入的回归。
+
+**下一位 Agent 快速定位提示：** 在把 PR #2 应用到真实服务**之前**，先跑 `ls -1 <root>/config-releases | wc -l`；若为 0，必须先按上面的建议 1/2 形成回滚计划，并确认已获得更新真实服务的授权。
+
+---
+
+## Round 3 未复现/未验证的事项（明确标注）
+
+- **公网 HTTPS / 防火墙边界（GOTCHA-024、Issue #3）：** 仍未验证。`ubuntu` 无免密 sudo，`sudo -n ufw status` 被拒；本轮**未**修改 ufw/iptables/DNS/TLS，也**未**改变实地绑定（仍为 `0.0.0.0:8081`）。因此 GOTCHA-024 保持 **OPEN**，不得因为“局域网可访问”而标记 FIXED。
+- **真实配额耗尽 / IDB onblocked / 非 Chromium 设备 / 屏幕阅读器 / 长会话与休眠（014/015/016/017/019）：** 本轮未新增验证，状态不变。
+- **混版本修复：** 已复现未修复（GOTCHA-026）。
+- **`.Config.Image` 字符串比较陷阱（PREVENTIVE / P3）：** `deploy.sh` 用 `docker inspect .Config.Image` 与 `SF_IMAGE` 做**字符串**比较。若容器当初用其它等价写法创建（如 `docker.io/library/nginx:1.27-alpine`、摘要、或不同 tag 别名），则会持续判定“image drift”并拒绝发布（fail-closed，无风险，但需要人工改为一致写法）。本轮实测：正常以 `nginx:1.27-alpine` 创建时完全匹配；用本地 tag 别名（`start-first-nginx-alias:fi`）可稳定复现“image drift”拒绝。**尚未在真实服务上遇到**，属预防性记录。

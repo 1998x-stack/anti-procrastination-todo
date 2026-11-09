@@ -69,6 +69,12 @@ deploy/rollback.sh --list   # rollback points
 
 **Security gate:** 0.0.0.0 is not LAN-only access control. Plain HTTP permits in-transit JS modification; modified same-origin scripts could read IndexedDB. Verify firewall/TLS before real-user access (GOTCHA-024 OPEN).
 
+~~~bash
+npm run test:deploy:scripts   # offline deployment/rollback fault-injection contracts (no Docker needed)
+npm run test:deploy:staging   # REAL Docker + nginx fault injection against an isolated staging root
+npm run lab:mixed-version     # reproducible cross-release mixed-version experiment (GOTCHA-026)
+~~~
+
 Full runbook: [docs/deployment-linux.md](docs/deployment-linux.md) · Operational incident handbook for the next agent: [docs/gotchas.md](docs/gotchas.md) · Latest measured results: [docs/test-report.md](docs/test-report.md).
 
 **Loopback-first is deliberate:** `crypto.randomUUID()` and other secure-context APIs require HTTPS or localhost, and IndexedDB is isolated per origin. A public deployment must terminate HTTPS before it is exposed; see gotchas GOTCHA-005 and GOTCHA-018.
